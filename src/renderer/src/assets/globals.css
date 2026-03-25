@@ -1,0 +1,143 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* Nether Flash */
+:root, .dark {
+  --background: #0a0808;
+  --foreground: #ffffff;
+  --card: #141212;
+  --card-foreground: #ffffff;
+  --popover: #141212;
+  --popover-foreground: #ffffff;
+  --primary: #ff5625;
+  --primary-foreground: #ffffff;
+  --secondary: #141212;
+  --secondary-foreground: #ffffff;
+  --muted: #0a0808;
+  --muted-foreground: #a8a0a0;
+  --accent: #ff5625;
+  --accent-foreground: #ffffff;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #2a2422;
+  --input: #2a2422;
+  --ring: #ff5625;
+  --chart-1: #ff5625;
+  --chart-2: #8B5CF6;
+  --chart-3: #ff7043;
+  --chart-4: #E63E00;
+  --chart-5: #4C1D95;
+  --radius: 6px;
+  --sidebar: #0a0808;
+  --sidebar-foreground: #a8a0a0;
+  --sidebar-primary: #ff5625;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #141212;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #2a2422;
+  --sidebar-ring: rgba(255,86,37, 0.4);
+}
+
+@theme inline {
+  --font-sans: 'Inter', sans-serif;
+  --font-headline: 'Manrope', sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2422; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #ff5625; }
+
+/* Hidden scrollbar (mouse wheel still works) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Character animations */
+@keyframes char-breathe-nv {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(1px); }
+}
+
+@keyframes char-weight-shift-nv {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-1px); }
+}
+
+@keyframes char-clench-nv {
+  0%, 85%, 100% { transform: translateX(0); }
+  90%, 95% { transform: translateX(-1px); }
+}
+
+@keyframes char-blink-nv {
+  0%, 96%, 100% { opacity: 1; }
+  97%, 99% { opacity: 0; }
+}
+
+@keyframes char-hover-step-nv {
+  0%, 100% { transform: translateX(0); }
+  20%, 80% { transform: translateX(-3px); }
+}
+
+.char-idle { animation: char-breathe-nv 3s steps(2, jump-none) infinite; }
+.char-torso { animation: char-weight-shift-nv 2s steps(2, jump-none) infinite; }
+.char-clench { animation: char-clench-nv 4s steps(2, jump-none) infinite; }
+.char-blink { animation: char-blink-nv 4s steps(1, jump-end) infinite; }
+@keyframes char-rocklee-bounce {
+  0%, 100% { transform: translateY(0); }
+  15% { transform: translateY(-4px); }
+  30% { transform: translateY(0); }
+  45% { transform: translateY(-2px); }
+  60% { transform: translateY(0); }
+}
+
+.char-step { transition: transform 0.3s steps(3, jump-none); }
+.char-step:hover { transform: translateX(-3px); }
+.char-bounce { animation: char-rocklee-bounce 1.8s ease-in-out infinite; }

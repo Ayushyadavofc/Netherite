@@ -1,0 +1,1187 @@
+import { useState, useEffect } from 'react'
+import { Plus, ChevronRight, Play, Trash2, Shuffle, X } from 'lucide-react'
+import { ReviewCard } from '@/components/flashcards/review-card'
+import { StatsOverview } from '@/components/flashcards/stats-overview'
+import { RichTextarea } from '@/components/flashcards/rich-textarea'
+import { extractMarkdownPreviewText } from '@/components/shared/MarkdownContent'
+import { detectAttachmentKind, normalizePath, type AttachmentItem } from '@/lib/attachments'
+
+export type CardState = 'new' | 'learning' | 'review' | 'relearning'
+
+export interface SM2Data {
+  reps: number
+  interval: number // In days, except implicitly handled during learning via steps
+  ease: number
+  nextReview: number
+  state: CardState
+  step: number
+  lapses: number
+}
+
+export interface Card {
+  id: string
+  question: string
+  answer: string
+  sm2: SM2Data
+}
+
+export interface DeckSettings {
+  newCardsPerDay: number
+  maximumReviewsPerDay: number
+  newCardsIgnoreReviewLimit: boolean
+  limitsStartFromTop: boolean
+  
+  learningSteps: string
+  graduatingInterval: number
+  easyInterval: number
+  insertionOrder: 'Sequential' | 'Random'
+  
+  relearningSteps: string
+  minimumInterval: number
+  leechThreshold: number
+  leechAction: 'Suspend' | 'Tag Only'
+  
+  maximumInterval: number
+  startingEase: number
+  easyBonus: number
+  intervalModifier: number
+  hardInterval: number
+  newInterval: number
+
+  buryNewSiblings: boolean
+  buryReviewSiblings: boolean
+  buryInterdayLearningSiblings: boolean
+
+  dontPlayAudioAutomatically: boolean
+  skipQuestionWhenReplayingAnswer: boolean
+  
+  maximumAnswerSeconds: number
+  showOnScreenTimer: boolean
+  stopTimerOnAnswer: boolean
+
+  secondsToShowQuestion: number
+  secondsToShowAnswer: number
+  waitForAudio: boolean
+  questionAction: string
+  answerAction: string
+
+  newCardGatherOrder: string
+  newCardSortOrder: string
+  newReviewOrder: string
+  interdayLearningReviewOrder: string
+  reviewSortOrder: string
+}
+
+export const defaultDeckSettings: DeckSettings = {
+  newCardsPerDay: 20,
+  maximumReviewsPerDay: 200,
+  newCardsIgnoreReviewLimit: false,
+  limitsStartFromTop: false,
+  
+  learningSteps: '1 10', // simplified to generic numbers '1 10' representing minutes
+  graduatingInterval: 1,
+  easyInterval: 4,
+  insertionOrder: 'Sequential',
+  
+  relearningSteps: '10',
+  minimumInterval: 1,
+  leechThreshold: 8,
+  leechAction: 'Tag Only',
+  
+  maximumInterval: 36500,
+  startingEase: 2.5,
+  easyBonus: 1.3,
+  intervalModifier: 1.0,
+  hardInterval: 1.2,
+  newInterval: 0.0,
+
+  buryNewSiblings: false,
+  buryReviewSiblings: false,
+  buryInterdayLearningSiblings: false,
+
+  dontPlayAudioAutomatically: false,
+  skipQuestionWhenReplayingAnswer: false,
+
+  maximumAnswerSeconds: 60,
+  showOnScreenTimer: false,
+  stopTimerOnAnswer: false,
+
+  secondsToShowQuestion: 0.0,
+  secondsToShowAnswer: 0.0,
+  waitForAudio: true,
+  questionAction: 'Show Answer',
+  answerAction: 'Bury Card',
+
+  newCardGatherOrder: 'Deck',
+  newCardSortOrder: 'Card type, then order gathered',
+  newReviewOrder: 'Mix with reviews',
+  interdayLearningReviewOrder: 'Mix with reviews',
+  reviewSortOrder: 'Due date, then random'
+}
+
+export interface Deck {
+  id: string
+  name: string
+  fileName: string
+  total: number
+  dueToday: number
+  newCards: number
+  lastStudied: string
+  isOverdue: boolean
+  settings: DeckSettings
+  cards: Card[]
+}
+
+export function calculateSM2(
+  quality: number, 
+  sm2: SM2Data,
+  settings: DeckSettings = defaultDeckSettings
+): SM2Data {
+  let { reps, interval, ease, state, step, lapses } = sm2
+
+  const now = Date.now()
+  const learningSteps = settings.learningSteps.split(' ').map(Number)
+  const relearningSteps = settings.relearningSteps.split(' ').map(Number)
+
+  if (state === 'new' || state === 'learning') {
+    if (quality === 0) {
+      step = 0
+      state = 'learning'
+      interval = learningSteps[0] || 1
+    } else if (quality === 3) {
+      state = 'learning'
+      interval = learningSteps[step] || 1
+    } else if (quality === 4) {
+      step++
+      if (step >= learningSteps.length) {
+        state = 'review'
+        interval = settings.graduatingInterval * 24 * 60
+        reps = 1
+      } else {
+        state = 'learning'
+        interval = learningSteps[step]
+      }
+    } else if (quality === 5) {
+      state = 'review'
+      interval = settings.easyInterval * 24 * 60
+      reps = 1
+    }
+  } else if (state === 'review') {
+    if (quality === 0) {
+      lapses++
+      state = 'relearning'
+      step = 0
+      interval = relearningSteps[0] || 1
+      ease = Math.max(1.3, ease - 0.2)
+    } else if (quality === 3) {
+      interval = Math.round(interval * settings.hardInterval)
+      ease = Math.max(1.3, ease - 0.15)
+    } else if (quality === 4) {
+      interval = Math.round(interval * ease * settings.intervalModifier)
+    } else if (quality === 5) {
+      interval = Math.round(interval * ease * settings.intervalModifier * settings.easyBonus)
+      ease += 0.15
+    }
+    
+    if (state === 'review') {
+      const minInterval = settings.minimumInterval * 24 * 60
+      const maxInterval = settings.maximumInterval * 24 * 60
+      if (interval < minInterval) interval = minInterval
+      if (interval > maxInterval) interval = maxInterval
+    }
+  } else if (state === 'relearning') {
+    if (quality === 0) {
+      step = 0
+      interval = relearningSteps[0] || 1
+    } else if (quality === 3) {
+      interval = relearningSteps[step] || 1
+    } else if (quality === 4) {
+      step++
+      if (step >= relearningSteps.length) {
+        state = 'review'
+        interval = Math.max(settings.minimumInterval * 24 * 60, interval * settings.newInterval)
+      } else {
+        interval = relearningSteps[step]
+      }
+    } else if (quality === 5) {
+      state = 'review'
+      interval = Math.max(settings.minimumInterval * 24 * 60, interval * settings.newInterval)
+    }
+  }
+
+  const nextReview = now + interval * 60 * 1000
+  return { reps, interval, ease, nextReview, state, step, lapses }
+}
+
+function parseDeckFile(content: string, fileName: string): Deck {
+  const name = fileName.replace(/\.md$/, '').split('/').pop() || fileName
+  const deck: Deck = {
+    id: fileName,
+    name,
+    fileName,
+    cards: [],
+    total: 0,
+    dueToday: 0,
+    newCards: 0,
+    lastStudied: 'Never',
+    isOverdue: false,
+    settings: { ...defaultDeckSettings }
+  }
+
+  const blocks = content.split(/^---$/m)
+  
+  if (blocks[0]) {
+    const settingsMatch = blocks[0].match(/<!-- AnkiSettings:\s*(\{.*?\})\s*-->/)
+    if (settingsMatch) {
+      try { deck.settings = { ...deck.settings, ...JSON.parse(settingsMatch[1]) } } catch {}
+    }
+  }
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i].trim()
+    if (!block) continue
+
+  const rx = /^Q:\s*([\s\S]*?)^\s*A:\s*([\s\S]*?)(?:^\s*<!-- SM2:\s*(\{.*?\})\s*-->|$)/m
+    const match = block.match(rx)
+
+    if (match) {
+      const question = match[1].trim()
+      const answer = match[2].trim()
+      let sm2: SM2Data = { 
+        reps: 0, 
+        interval: 0, 
+        ease: deck.settings.startingEase, 
+        nextReview: 0,
+        state: 'new',
+        step: 0,
+        lapses: 0 
+      }
+      if (match[3]) {
+        try { sm2 = { ...sm2, ...JSON.parse(match[3]) } } catch {}
+      }
+      deck.cards.push({ id: crypto.randomUUID(), question, answer, sm2 })
+    }
+  }
+
+  deck.total = deck.cards.length
+  deck.newCards = deck.cards.filter(c => c.sm2.reps === 0).length
+  deck.dueToday = deck.cards.filter(c => c.sm2.reps > 0 && c.sm2.nextReview <= Date.now()).length
+  deck.isOverdue = deck.dueToday > 0
+
+  return deck
+}
+
+function formatInterval(mins: number) {
+  if (mins < 60) return `${Math.round(mins)}m`
+  const hours = mins / 60
+  if (hours < 24) return `${Math.round(hours)}h`
+  const days = hours / 24
+  if (days >= 365) return `${(days / 365).toFixed(1)}y`
+  if (days >= 30) return `${(days / 30).toFixed(1)}mo`
+  return `${Math.round(days)}d`
+}
+
+function collectAttachmentItems(nodes: any[], vaultPath: string) {
+  const attachments: AttachmentItem[] = []
+
+  const visit = (items: any[]) => {
+    for (const item of items) {
+      const relativePath = normalizePath(item.path || '')
+      if (item.type === 'folder') {
+        if (item.children) visit(item.children)
+        continue
+      }
+
+      if (relativePath.toLowerCase().startsWith('attachments/')) {
+        attachments.push({
+          name: item.name,
+          fullPath: `${vaultPath}/${relativePath}`,
+          relativePath,
+          kind: detectAttachmentKind(item.name)
+        })
+      }
+    }
+  }
+
+  visit(nodes)
+  return attachments.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export default function FlashcardsPage() {
+  const [decks, setDecks] = useState<Deck[]>([])
+  const [isStudying, setIsStudying] = useState(false)
+  const [currentCardIndex, setCurrentCardIndex] = useState(0)
+  const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null)
+
+  const [showCreateDeck, setShowCreateDeck] = useState(false)
+  const [newDeckName, setNewDeckName] = useState("")
+
+  const [showAddCard, setShowAddCard] = useState(false)
+  const [newQuestion, setNewQuestion] = useState("")
+  const [newAnswer, setNewAnswer] = useState("")
+  const [attachmentItems, setAttachmentItems] = useState<AttachmentItem[]>([])
+
+  const [showRemoveCard, setShowRemoveCard] = useState(false)
+
+  const loadDecks = async () => {
+    const vaultPath = localStorage.getItem('netherite-current-vault-path')
+    if (!vaultPath) return
+
+    const flashcardsDir = `${vaultPath}/flashcards`
+    try {
+      await window.electronAPI.createFolder(flashcardsDir)
+    } catch {}
+
+    try {
+      const files = await window.electronAPI.readFolder(flashcardsDir)
+      const deckFiles = files.filter((f: any) => f.type === 'file' && f.name.endsWith('.md'))
+
+      const loadedDecks: Deck[] = []
+      for (const f of deckFiles) {
+        if (f.content) {
+          loadedDecks.push(parseDeckFile(f.content, f.name))
+        } else {
+          try {
+            const content = await window.electronAPI.readFile(`${flashcardsDir}/${f.name}`)
+            loadedDecks.push(parseDeckFile(content, f.name))
+          } catch(e) {}
+        }
+      }
+      // Load external decks
+      const externalRefsPath = `${flashcardsDir}/externalDecks.json`
+      let externalPaths: string[] = []
+      try {
+        if (await window.electronAPI.fileExists(externalRefsPath)) {
+          const content = await window.electronAPI.readFile(externalRefsPath)
+          externalPaths = JSON.parse(content)
+          if (!Array.isArray(externalPaths)) externalPaths = []
+        } else {
+          await window.electronAPI.writeFile(externalRefsPath, '[]')
+        }
+      } catch(e) {}
+
+      for (const p of externalPaths) {
+        try {
+          const content = await window.electronAPI.readFile(p)
+          loadedDecks.push(parseDeckFile(content, p))
+        } catch(e) {}
+      }
+
+      setDecks(loadedDecks)
+    } catch (err) {
+      console.error('Failed to load flashcards:', err)
+    }
+  }
+
+  const loadAttachmentItems = async () => {
+    const vaultPath = localStorage.getItem('netherite-current-vault-path')
+    if (!vaultPath) return
+
+    try {
+      const nodes = await window.electronAPI.readFolder(vaultPath)
+      setAttachmentItems(collectAttachmentItems(nodes, vaultPath))
+    } catch (err) {
+      console.error('Failed to load flashcard attachments:', err)
+    }
+  }
+
+  useEffect(() => {
+    void loadDecks()
+    void loadAttachmentItems()
+  }, [])
+
+  const saveDeck = async (deck: Deck) => {
+    const vaultPath = localStorage.getItem('netherite-current-vault-path')
+    if (!vaultPath) return
+    const isAbsolute = deck.fileName.includes(':\\') || deck.fileName.startsWith('/')
+    const fullPath = isAbsolute ? deck.fileName : `${vaultPath}/flashcards/${deck.fileName}`
+
+    let content = `# ${deck.name}\n`
+    content += `<!-- AnkiSettings: ${JSON.stringify(deck.settings)} -->\n\n`
+    for (const card of deck.cards) {
+      content += `---\n`
+      content += `Q: ${card.question}\n`
+      content += `A: ${card.answer}\n`
+      content += `<!-- SM2: ${JSON.stringify(card.sm2)} -->\n\n`
+    }
+
+    try {
+      await window.electronAPI.writeFile(fullPath, content)
+      setDecks(prev => prev.map(d => d.id === deck.id ? deck : d))
+    } catch (err) {
+      console.error('Failed to save deck:', err)
+    }
+  }
+
+  const selectedDeck = decks.find(d => d.id === selectedDeckId) || null
+
+  const getStudyCards = (sourceCards: any[], settings: DeckSettings) => {
+    // Learning/relearning bypass daily limits
+    const learning = sourceCards.filter(c => (c.sm2.state === 'learning' || c.sm2.state === 'relearning') && c.sm2.nextReview <= Date.now())
+    const due = sourceCards.filter(c => c.sm2.state === 'review' && c.sm2.nextReview <= Date.now())
+    const newCards = sourceCards.filter(c => c.sm2.state === 'new')
+
+    const allowedReview = due.slice(0, settings.maximumReviewsPerDay)
+    const reviewLimitRemaining = settings.maximumReviewsPerDay - allowedReview.length
+    
+    // newCardsIgnoreReviewLimit logic
+    const effNewLimit = settings.newCardsIgnoreReviewLimit 
+      ? settings.newCardsPerDay 
+      : Math.min(settings.newCardsPerDay, reviewLimitRemaining)
+
+    const allowedNew = newCards.slice(0, effNewLimit)
+
+    return [...learning, ...allowedReview, ...allowedNew]
+  }
+
+  const allCards = decks.flatMap(d => d.cards.map(c => ({...c, _deckId: d.id, _settings: d.settings})))
+  const studyCards = selectedDeck 
+    ? getStudyCards(selectedDeck.cards.map(c => ({...c, _deckId: selectedDeck.id})), selectedDeck.settings)
+    : getStudyCards(allCards, defaultDeckSettings)
+
+  const handleStudyDeck = (deckId?: string) => {
+    if (deckId) setSelectedDeckId(deckId)
+    setIsStudying(true)
+    setCurrentCardIndex(0)
+  }
+
+  const handleStudyAllMixed = () => {
+    setSelectedDeckId(null)
+    setIsStudying(true)
+    setCurrentCardIndex(0)
+  }
+
+  const handleResponse = async (response: 'again' | 'hard' | 'good' | 'easy') => {
+    const qualityMap = { again: 0, hard: 3, good: 4, easy: 5 }
+    const current = studyCards[currentCardIndex]
+    
+    // Update SM2
+    const originalDeck = decks.find(d => d.id === current._deckId)
+    if (originalDeck) {
+      const updatedCard = { ...current, sm2: calculateSM2(qualityMap[response], current.sm2, originalDeck.settings) }
+      const updatedDeck = {
+        ...originalDeck,
+        cards: originalDeck.cards.map(c => c.id === current.id ? updatedCard : c)
+      }
+      
+      updatedDeck.newCards = updatedDeck.cards.filter(c => c.sm2.reps === 0).length
+      updatedDeck.dueToday = updatedDeck.cards.filter(c => c.sm2.reps > 0 && c.sm2.nextReview <= Date.now()).length
+      
+      await saveDeck(updatedDeck)
+    }
+
+    if (currentCardIndex < studyCards.length - 1) {
+      setCurrentCardIndex((prev) => prev + 1)
+    } else {
+      setIsStudying(false)
+      setCurrentCardIndex(0)
+    }
+  }
+
+  const handleCreateDeckSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newDeckName.trim()) return
+
+    const vaultPath = localStorage.getItem('netherite-current-vault-path')
+    if (!vaultPath) return
+
+    const fileName = `${newDeckName.trim()}.md`
+    const newDeck: Deck = {
+      id: fileName,
+      name: newDeckName.trim(),
+      fileName,
+      cards: [],
+      total: 0,
+      dueToday: 0,
+      newCards: 0,
+      lastStudied: 'Never',
+      isOverdue: false,
+      settings: { ...defaultDeckSettings }
+    }
+
+    await saveDeck(newDeck)
+    setDecks([...decks, newDeck])
+    setShowCreateDeck(false)
+    setNewDeckName("")
+  }
+
+  const handleAddCardSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedDeck || !newQuestion.trim() || !newAnswer.trim()) return
+
+    const newCard: Card = {
+      id: crypto.randomUUID(),
+      question: newQuestion.trim(),
+      answer: newAnswer.trim(),
+      sm2: { reps: 0, interval: 0, ease: selectedDeck.settings.startingEase, nextReview: 0, state: 'new', step: 0, lapses: 0 }
+    }
+
+    const updatedDeck = { ...selectedDeck, cards: [...selectedDeck.cards, newCard] }
+    updatedDeck.total++
+    updatedDeck.newCards++
+
+    await saveDeck(updatedDeck)
+    await loadAttachmentItems()
+    setShowAddCard(false)
+    setNewQuestion("")
+    setNewAnswer("")
+  }
+
+  const handleRemoveCard = async (cardId: string) => {
+    if (!selectedDeck) return
+    const updatedCards = selectedDeck.cards.filter(c => c.id !== cardId)
+    const updatedDeck = { ...selectedDeck, cards: updatedCards }
+    updatedDeck.total = updatedCards.length
+    updatedDeck.newCards = updatedCards.filter(c => c.sm2.reps === 0).length
+    updatedDeck.dueToday = updatedCards.filter(c => c.sm2.reps > 0 && c.sm2.nextReview <= Date.now()).length
+
+    await saveDeck(updatedDeck)
+  }
+
+  const handleLinkExternalDeck = async () => {
+    const vaultPath = localStorage.getItem('netherite-current-vault-path')
+    if (!vaultPath) return
+
+    const filePath = await window.electronAPI.selectFile([{ name: 'Markdown Decks', extensions: ['md'] }])
+    if (!filePath) return
+
+    const flashcardsDir = `${vaultPath}/flashcards`
+    const externalRefsPath = `${flashcardsDir}/externalDecks.json`
+    let externalPaths: string[] = []
+    try {
+      if (await window.electronAPI.fileExists(externalRefsPath)) {
+        const content = await window.electronAPI.readFile(externalRefsPath)
+        externalPaths = JSON.parse(content)
+        if (!Array.isArray(externalPaths)) externalPaths = []
+      } else {
+        await window.electronAPI.writeFile(externalRefsPath, '[]')
+      }
+    } catch(e) {}
+
+    const normalizedPath = filePath.replace(/\\/g, '/')
+    if (!externalPaths.includes(normalizedPath)) {
+      externalPaths.push(normalizedPath)
+      await window.electronAPI.writeFile(externalRefsPath, JSON.stringify(externalPaths, null, 2))
+      
+      try {
+        const content = await window.electronAPI.readFile(normalizedPath)
+        const newDeck = parseDeckFile(content, normalizedPath)
+        setDecks(prev => [...prev, newDeck])
+      } catch (e) {}
+    }
+  }
+
+  const [showSettings, setShowSettings] = useState(false)
+  const [deckSettingsForm, setDeckSettingsForm] = useState<DeckSettings>(defaultDeckSettings)
+
+  const openSettingsModal = () => {
+    if (!selectedDeck) return
+    setDeckSettingsForm(selectedDeck.settings)
+    setShowSettings(true)
+  }
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedDeck) return
+    const updatedDeck = { ...selectedDeck, settings: deckSettingsForm }
+    await saveDeck(updatedDeck)
+    setShowSettings(false)
+  }
+
+  const currentCard = studyCards[currentCardIndex]
+  const currentDeckSettings = selectedDeck?.settings || defaultDeckSettings
+  const sm2Intervals = currentCard ? {
+    again: formatInterval(calculateSM2(0, currentCard.sm2, currentDeckSettings).interval),
+    hard: formatInterval(calculateSM2(3, currentCard.sm2, currentDeckSettings).interval),
+    good: formatInterval(calculateSM2(4, currentCard.sm2, currentDeckSettings).interval),
+    easy: formatInterval(calculateSM2(5, currentCard.sm2, currentDeckSettings).interval)
+  } : undefined
+
+  const totalDue = decks.reduce((s, d) => s + d.dueToday, 0)
+  const totalNew = decks.reduce((s, d) => s + d.newCards, 0)
+  const totalCards = decks.reduce((s, d) => s + d.total, 0)
+  const newAndLearningTracker = decks.reduce((s, d) => s + d.cards.filter(c => c.sm2.reps <= 1).length, 0)
+
+  // Pie chart values 
+  const mastered = totalCards - newAndLearningTracker
+  const learning = newAndLearningTracker - totalNew
+  const unseen = totalNew
+  const pieTotal = totalCards || 1
+
+  return (
+    <div className="flex w-full h-full bg-[#0a0808]">
+      {/* Sidebar */}
+      <aside className="hidden lg:flex flex-col w-64 shrink-0 z-10 sticky top-0 h-[calc(100vh-48px)] overflow-y-auto border-r border-[#2a2422] bg-[#0a0808]">
+        {/* Header */}
+        <div className="p-6 pb-4">
+          <h2 className="text-xs font-bold text-[#ffb77d] uppercase tracking-[0.15em] mb-4">Decks</h2>
+        </div>
+
+        {/* Deck list */}
+        <div className="flex-1 overflow-y-auto px-3">
+          {decks.map(deck => {
+            const isActive = selectedDeckId === deck.id && !isStudying
+            return (
+              <button
+                key={deck.id}
+                onClick={() => { setSelectedDeckId(deck.id); setIsStudying(false) }}
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg mb-1 transition-all text-left group ${
+                  isActive
+                    ? 'bg-[rgba(255,86,37,0.1)] border border-[#ff5625]/20'
+                    : 'border border-transparent hover:bg-[#111111]'
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold truncate ${isActive ? 'text-[#ff5625]' : 'text-white'}`}>{deck.name}</p>
+                  <div className="flex items-center gap-3 mt-1">
+                    {deck.dueToday > 0 && (
+                      <span className={`text-[0.55rem] font-bold uppercase tracking-wider ${deck.isOverdue ? 'text-[#ff5449]' : 'text-[#ff5625]'}`}>
+                        {deck.dueToday} due
+                      </span>
+                    )}
+                    {deck.newCards > 0 && (
+                      <span className="text-[0.55rem] font-bold uppercase tracking-wider text-[#ffb77d]">
+                        {deck.newCards} new
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <ChevronRight className={`w-4 h-4 shrink-0 transition-colors ${isActive ? 'text-[#ff5625]' : 'text-[#444444] group-hover:text-white'}`} />
+              </button>
+            )
+          })}
+          {decks.length === 0 && (
+             <p className="text-xs text-[#666666] px-3 my-4 italic">No decks found...</p>
+          )}
+        </div>
+
+        <div className="p-4 flex flex-col gap-2">
+          <button onClick={() => setShowCreateDeck(true)} className="w-full flex items-center justify-center gap-2 py-3 bg-[rgba(255,86,37,0.1)] text-[#ff5625] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:bg-[rgba(255,86,37,0.2)] transition-colors">
+            <Plus className="w-4 h-4" />
+            Create Deck
+          </button>
+          <button onClick={handleLinkExternalDeck} className="w-full flex items-center justify-center gap-2 py-3 bg-[#111111] border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors">
+            <span className="material-symbols-outlined text-sm">link</span>
+            Link Deck
+          </button>
+        </div>
+
+        {/* Session Stats */}
+        {isStudying && (
+          <div className="mx-4 mb-4 p-4 bg-[#141212] border border-[#2a2422] rounded-lg">
+            <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] mb-3 font-bold">Session</h4>
+            <div className="flex justify-between items-end mb-3">
+              <span className="text-[#a8a0a0] text-xs uppercase">Remaining</span>
+              <span className="text-xl font-bold text-white font-headline">{studyCards.length - currentCardIndex}</span>
+            </div>
+            <div className="w-full bg-[#0a0808] border border-[#2a2422] h-1.5 rounded-full overflow-hidden mb-2">
+              <div 
+                className="h-full bg-[#ff5625] transition-all duration-300 shadow-[0_0_8px_rgba(255,86,37,0.6)]" 
+                style={{ width: `${(currentCardIndex / Math.max(1, studyCards.length)) * 100}%` }}
+              />
+            </div>
+            <button 
+               onClick={() => { setIsStudying(false) }}
+               className="mt-3 w-full py-2 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded font-bold text-[0.6rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors"
+            >
+               Abort Session
+            </button>
+          </div>
+        )}
+      </aside>
+
+      {/* Main Content */}
+      <section className="flex-grow flex flex-col z-10 overflow-y-auto relative">
+        {isStudying && currentCard ? (
+          <ReviewCard
+            question={currentCard.question}
+            answer={currentCard.answer}
+            attachmentItems={attachmentItems}
+            currentCard={currentCardIndex + 1}
+            totalCards={studyCards.length}
+            onResponse={handleResponse}
+            sm2Intervals={sm2Intervals}
+            settings={currentDeckSettings}
+          />
+        ) : selectedDeck ? (
+          <div className="p-8 md:p-12 max-w-4xl mx-auto w-full">
+            <div className="mb-8">
+              <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] mb-1">Deck Details</p>
+              <h1 className="text-3xl font-extrabold text-white font-headline">{selectedDeck.name}</h1>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
+                <p className="text-3xl font-extrabold text-white font-headline">{selectedDeck.total}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Total Cards</p>
+              </div>
+              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
+                <p className="text-3xl font-extrabold text-[#ff5625] font-headline">{selectedDeck.dueToday}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Due Today</p>
+              </div>
+              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
+                <p className="text-3xl font-extrabold text-[#ffb77d] font-headline">{selectedDeck.newCards}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">New Cards</p>
+              </div>
+              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
+                <p className="text-xs font-bold text-[#a8a0a0]">{selectedDeck.lastStudied}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Last Studied</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-4">
+              <button
+                onClick={() => handleStudyDeck(selectedDeck.id)}
+                disabled={studyCards.length === 0}
+                className="flex items-center gap-2 px-6 py-3 bg-[rgba(255,86,37,0.1)] border border-[#ff5625] text-[#ff5625] rounded-lg font-bold text-sm hover:bg-[rgba(255,86,37,0.25)] hover:shadow-[0_0_12px_rgba(255,86,37,0.3)] transition-all uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Play className="w-4 h-4" />
+                Start Session
+              </button>
+              <button onClick={() => setShowAddCard(true)} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-[#ffb77d] hover:text-[#ffb77d] transition-all uppercase tracking-widest">
+                <Plus className="w-4 h-4" />
+                Add Card
+              </button>
+              <button onClick={() => setShowRemoveCard(true)} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-[#ff5449] hover:text-[#ff5449] transition-all uppercase tracking-widest">
+                <Trash2 className="w-4 h-4" />
+                Remove Card
+              </button>
+              <button onClick={openSettingsModal} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-white hover:text-white transition-all uppercase tracking-widest">
+                <span className="material-symbols-outlined text-[16px]">settings</span>
+                Settings
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-8 md:p-12 max-w-5xl mx-auto w-full space-y-12">
+            <div>
+              <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] mb-1">Overview</p>
+              <h1 className="text-3xl font-extrabold text-white font-headline">Flashcards</h1>
+            </div>
+
+            <div>
+              <h2 className="mb-6 text-sm font-bold text-[#ffb77d] uppercase tracking-[0.2em]">Global Metrics</h2>
+              <StatsOverview 
+                todayReview={totalDue}
+                newCards={totalNew}
+                learningCards={learning}
+                dueCards={totalDue}
+                totalCards={totalCards}
+                mastered={mastered}
+                streak={12}
+              />
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-8 items-start">
+              <div className="flex flex-col items-center gap-4">
+                <h3 className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#a8a0a0]">Card Distribution</h3>
+                <div className="relative w-40 h-40">
+                  <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                    <circle cx="18" cy="18" r="14" fill="none" stroke="#2a2422" strokeWidth="4" />
+                    <circle cx="18" cy="18" r="14" fill="none" stroke="#ff5625" strokeWidth="4"
+                      strokeDasharray={`${(mastered / pieTotal) * 88} 88`}
+                      strokeDashoffset="0"
+                    />
+                    <circle cx="18" cy="18" r="14" fill="none" stroke="#ffb77d" strokeWidth="4"
+                      strokeDasharray={`${(learning / pieTotal) * 88} 88`}
+                      strokeDashoffset={`${-(mastered / pieTotal) * 88}`}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-xl font-extrabold text-white font-headline">{totalCards}</span>
+                  </div>
+                </div>
+                <div className="flex gap-4 text-[0.55rem] uppercase tracking-widest font-bold">
+                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#ff5625]" /><span className="text-[#a8a0a0]">Mastered</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#ffb77d]" /><span className="text-[#a8a0a0]">Learning</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#2a2422]" /><span className="text-[#a8a0a0]">Unseen</span></div>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col gap-4">
+                <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-6">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-2">Mixed Review</h3>
+                  <p className="text-xs text-[#666666] mb-4">Study all cards from every deck shuffled together.</p>
+                  <button
+                    onClick={handleStudyAllMixed}
+                    disabled={studyCards.length === 0}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-[rgba(255,86,37,0.1)] border border-[#ff5625] text-[#ff5625] rounded-lg font-bold text-sm hover:bg-[rgba(255,86,37,0.25)] hover:shadow-[0_0_12px_rgba(255,86,37,0.3)] transition-all uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Shuffle className="w-4 h-4" />
+                    Study All
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-4">
+                    <p className="text-2xl font-extrabold text-[#ff5449] font-headline">{totalDue}</p>
+                    <p className="text-[0.55rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Total Due</p>
+                  </div>
+                  <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-4">
+                    <p className="text-2xl font-extrabold text-[#ffb77d] font-headline">{totalNew}</p>
+                    <p className="text-[0.55rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Total New</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Modals */}
+      {showCreateDeck && (
+        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]">
+          <form onSubmit={handleCreateDeckSubmit} className="bg-[#111111] border border-[#2a2422] rounded-xl p-8 w-full max-w-md shadow-[0_0_40px_rgba(0,0,0,0.8)]">
+            <h3 className="text-xl font-bold text-white mb-6">Create New Deck</h3>
+            <input 
+              autoFocus
+              className="w-full bg-[#0a0808] border border-[#2a2422] rounded-lg py-3 px-4 text-white focus:border-[#ff5625] outline-none transition-colors mb-6 font-mono text-sm"
+              placeholder="Deck Name (e.g. Science)"
+              value={newDeckName}
+              onChange={e => setNewDeckName(e.target.value)}
+            />
+            <div className="flex gap-4 justify-end">
+              <button type="button" onClick={() => setShowCreateDeck(false)} className="px-5 py-2 text-[#a8a0a0] hover:text-white transition-colors text-sm font-bold">Cancel</button>
+              <button type="submit" className="px-5 py-2 bg-[rgba(255,86,37,0.1)] text-[#ff5625] border border-[#ff5625]/20 rounded-lg font-bold text-sm hover:bg-[#ff5625] hover:text-white transition-colors">Create Deck</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showAddCard && (
+        <div className="absolute inset-0 z-[100] overflow-y-auto bg-black/80 p-6 backdrop-blur-sm">
+          <form onSubmit={handleAddCardSubmit} className="mx-auto flex max-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col gap-5 overflow-y-auto rounded-xl border border-[#2a2422] bg-[#111111] p-6 shadow-[0_0_40px_rgba(0,0,0,0.8)]">
+            <h3 className="text-xl font-bold text-white font-headline">Add Card to {selectedDeck?.name}</h3>
+            
+            <RichTextarea value={newQuestion} onChange={setNewQuestion} label="Question" minHeight="220px" />
+            <RichTextarea value={newAnswer} onChange={setNewAnswer} label="Answer" minHeight="220px" />
+
+            <div className="mt-2 flex justify-end gap-4">
+              <button type="button" onClick={() => setShowAddCard(false)} className="px-5 py-2 text-[#a8a0a0] hover:text-white transition-colors text-sm font-bold">Cancel</button>
+              <button type="submit" className="px-5 py-2 bg-[rgba(255,86,37,0.1)] text-[#ff5625] border border-[#ff5625]/20 rounded-lg font-bold text-sm hover:bg-[#ff5625] hover:text-white transition-colors">Save Card</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showRemoveCard && selectedDeck && (
+        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] py-12">
+          <div className="bg-[#111111] border border-[#2a2422] rounded-xl p-8 w-full max-w-3xl h-full max-h-[80vh] flex flex-col gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)]">
+            <div className="flex justify-between items-center border-b border-[#2a2422] pb-4 shrink-0">
+              <h3 className="text-2xl font-bold text-white font-headline">Remove Cards</h3>
+              <button onClick={() => setShowRemoveCard(false)} className="text-[#a8a0a0] hover:text-white transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+              {selectedDeck.cards.length === 0 && <p className="text-[#a8a0a0] text-sm py-8 text-center italic">No cards in this deck.</p>}
+              {selectedDeck.cards.map(card => (
+                <div key={card.id} className="flex gap-4 items-start p-4 bg-[#0a0808] border border-[#1f1d1d] rounded-lg hover:border-[#2a2422] transition-colors">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-white font-bold mb-2 break-words leading-relaxed">{extractMarkdownPreviewText(card.question) || 'Untitled question'}</p>
+                    <p className="text-xs text-[#a8a0a0] break-words leading-relaxed">{extractMarkdownPreviewText(card.answer) || 'No answer'}</p>
+                    <p className="text-[0.6rem] uppercase tracking-widest text-[#666666] mt-3 font-bold">Reps: {card.sm2.reps} · Ease: {card.sm2.ease.toFixed(2)}</p>
+                  </div>
+                  <button 
+                    onClick={() => handleRemoveCard(card.id)}
+                    className="p-3 text-[#ff5449]/70 hover:text-[#ff5449] hover:bg-[rgba(255,84,73,0.1)] rounded-lg transition-all"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && selectedDeck && (
+        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] py-12">
+          <form onSubmit={handleSaveSettings} className="bg-[#111111] border border-[#2a2422] rounded-xl p-8 w-full max-w-4xl max-h-[90vh] flex flex-col gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] overflow-y-auto relative">
+            <div className="flex justify-between items-center border-b border-[#2a2422] pb-4 shrink-0 sticky top-0 bg-[#111111] z-10 w-full">
+              <h3 className="text-2xl font-bold text-white font-headline">Deck Options: {selectedDeck.name}</h3>
+              <button type="button" onClick={() => setShowSettings(false)} className="text-[#a8a0a0] hover:text-white transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pb-6 border-b border-[#2a2422]">
+              {/* Daily Limits */}
+              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Daily Limits</h4>
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">New cards/day</label>
+                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.newCardsPerDay} onChange={e => setDeckSettingsForm(p => ({...p, newCardsPerDay: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Maximum reviews/day</label>
+                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.maximumReviewsPerDay} onChange={e => setDeckSettingsForm(p => ({...p, maximumReviewsPerDay: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-[#a8a0a0] font-bold">New cards ignore review limit</label>
+                    <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.newCardsIgnoreReviewLimit} onChange={e => setDeckSettingsForm(p => ({...p, newCardsIgnoreReviewLimit: e.target.checked}))} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Limits start from top</label>
+                    <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.limitsStartFromTop} onChange={e => setDeckSettingsForm(p => ({...p, limitsStartFromTop: e.target.checked}))} />
+                  </div>
+                </div>
+              </div>
+
+              {/* New Cards */}
+              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#ffb77d] font-bold mb-4">New Cards</h4>
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Learning steps (mins space-separated)</label>
+                    <input type="text" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.learningSteps} onChange={e => setDeckSettingsForm(p => ({...p, learningSteps: e.target.value}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Graduating Interval (days)</label>
+                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.graduatingInterval} onChange={e => setDeckSettingsForm(p => ({...p, graduatingInterval: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Easy Interval (days)</label>
+                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.easyInterval} onChange={e => setDeckSettingsForm(p => ({...p, easyInterval: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Insertion order</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.insertionOrder} onChange={e => setDeckSettingsForm(p => ({...p, insertionOrder: e.target.value as 'Sequential'|'Random'}))}
+                    >
+                      <option value="Sequential">Sequential (oldest cards first)</option>
+                      <option value="Random">Random</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lapses */}
+              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#ff5449] font-bold mb-4">Lapses</h4>
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Relearning steps (mins space-separated)</label>
+                    <input type="text" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.relearningSteps} onChange={e => setDeckSettingsForm(p => ({...p, relearningSteps: e.target.value}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Minimum Interval (days)</label>
+                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.minimumInterval} onChange={e => setDeckSettingsForm(p => ({...p, minimumInterval: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Leech threshold</label>
+                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.leechThreshold} onChange={e => setDeckSettingsForm(p => ({...p, leechThreshold: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Leech action</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.leechAction} onChange={e => setDeckSettingsForm(p => ({...p, leechAction: e.target.value as 'Suspend'|'Tag Only'}))}
+                    >
+                      <option value="Suspend">Suspend</option>
+                      <option value="Tag Only">Tag Only</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Advanced */}
+              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Advanced</h4>
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Maximum interval (days)</label>
+                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.maximumInterval} onChange={e => setDeckSettingsForm(p => ({...p, maximumInterval: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Starting ease</label>
+                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.startingEase} onChange={e => setDeckSettingsForm(p => ({...p, startingEase: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Easy bonus</label>
+                    <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.easyBonus} onChange={e => setDeckSettingsForm(p => ({...p, easyBonus: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Interval modifier</label>
+                    <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      value={deckSettingsForm.intervalModifier} onChange={e => setDeckSettingsForm(p => ({...p, intervalModifier: parseFloat(e.target.value)}))} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Hard interval</label>
+                      <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                        value={deckSettingsForm.hardInterval} onChange={e => setDeckSettingsForm(p => ({...p, hardInterval: parseFloat(e.target.value)}))} />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">New interval</label>
+                      <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                        value={deckSettingsForm.newInterval} onChange={e => setDeckSettingsForm(p => ({...p, newInterval: parseFloat(e.target.value)}))} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Display Order */}
+              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Display Order</h4>
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">New card gather order</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.newCardGatherOrder} onChange={e => setDeckSettingsForm(p => ({...p, newCardGatherOrder: e.target.value}))}>
+                      <option value="Deck">Deck</option>
+                      <option value="Random">Random</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">New card sort order</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.newCardSortOrder} onChange={e => setDeckSettingsForm(p => ({...p, newCardSortOrder: e.target.value}))}>
+                      <option value="Card type, then order gathered">Card type, then order gathered</option>
+                      <option value="Random">Random</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">New/review order</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.newReviewOrder} onChange={e => setDeckSettingsForm(p => ({...p, newReviewOrder: e.target.value}))}>
+                      <option value="Mix with reviews">Mix with reviews</option>
+                      <option value="Show after reviews">Show after reviews</option>
+                      <option value="Show before reviews">Show before reviews</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Interday learning/review order</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.interdayLearningReviewOrder} onChange={e => setDeckSettingsForm(p => ({...p, interdayLearningReviewOrder: e.target.value}))}>
+                      <option value="Mix with reviews">Mix with reviews</option>
+                      <option value="Show after reviews">Show after reviews</option>
+                      <option value="Show before reviews">Show before reviews</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-[#a8a0a0] font-bold">Review sort order</label>
+                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      value={deckSettingsForm.reviewSortOrder} onChange={e => setDeckSettingsForm(p => ({...p, reviewSortOrder: e.target.value}))}>
+                      <option value="Due date, then random">Due date, then random</option>
+                      <option value="Random">Random</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Timers & Audio */}
+              <div className="flex flex-col gap-8">
+                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Timers</h4>
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Maximum answer seconds</label>
+                      <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                        value={deckSettingsForm.maximumAnswerSeconds} onChange={e => setDeckSettingsForm(p => ({...p, maximumAnswerSeconds: parseFloat(e.target.value)}))} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Show on-screen timer</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.showOnScreenTimer} onChange={e => setDeckSettingsForm(p => ({...p, showOnScreenTimer: e.target.checked}))} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Stop on-screen timer on answer</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.stopTimerOnAnswer} onChange={e => setDeckSettingsForm(p => ({...p, stopTimerOnAnswer: e.target.checked}))} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Audio</h4>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Don't play audio automatically</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.dontPlayAudioAutomatically} onChange={e => setDeckSettingsForm(p => ({...p, dontPlayAudioAutomatically: e.target.checked}))} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Skip question when replaying answer</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.skipQuestionWhenReplayingAnswer} onChange={e => setDeckSettingsForm(p => ({...p, skipQuestionWhenReplayingAnswer: e.target.checked}))} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Burying & Auto Advance */}
+              <div className="flex flex-col gap-8">
+                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Burying</h4>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Bury new siblings</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.buryNewSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryNewSiblings: e.target.checked}))} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Bury review siblings</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.buryReviewSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryReviewSiblings: e.target.checked}))} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Bury interday learning siblings</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.buryInterdayLearningSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryInterdayLearningSiblings: e.target.checked}))} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Auto Advance</h4>
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Seconds to show question for</label>
+                      <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                        value={deckSettingsForm.secondsToShowQuestion} onChange={e => setDeckSettingsForm(p => ({...p, secondsToShowQuestion: parseFloat(e.target.value)}))} />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Seconds to show answer for</label>
+                      <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                        value={deckSettingsForm.secondsToShowAnswer} onChange={e => setDeckSettingsForm(p => ({...p, secondsToShowAnswer: parseFloat(e.target.value)}))} />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Question action</label>
+                      <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                        value={deckSettingsForm.questionAction} onChange={e => setDeckSettingsForm(p => ({...p, questionAction: e.target.value}))}>
+                        <option value="Show Answer">Show Answer</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Answer action</label>
+                      <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                        value={deckSettingsForm.answerAction} onChange={e => setDeckSettingsForm(p => ({...p, answerAction: e.target.value}))}>
+                        <option value="Bury Card">Bury Card</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#a8a0a0] font-bold">Wait for audio</label>
+                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.waitForAudio} onChange={e => setDeckSettingsForm(p => ({...p, waitForAudio: e.target.checked}))} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <div className="flex justify-end gap-3 shrink-0 pt-2">
+              <button type="button" onClick={() => setShowSettings(false)} className="px-5 py-2 text-[#a8a0a0] hover:text-white transition-colors text-sm font-bold">Cancel</button>
+              <button type="submit" className="px-5 py-2 bg-[rgba(255,86,37,0.1)] text-[#ff5625] border border-[#ff5625]/20 rounded-lg font-bold text-sm hover:bg-[#ff5625] hover:text-white transition-colors">Save Settings</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  )
+}
