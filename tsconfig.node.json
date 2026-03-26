@@ -5,8 +5,11 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "outDir": "out/tsconfig.node.tsbuildinfo",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "types": ["node"]
   },
   "include": [
     "electron.vite.config.*",

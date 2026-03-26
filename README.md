@@ -1,26 +1,59 @@
-## Netherite Second Brain
+# Netherite
 
-Netherite is a desktop “second brain” experience built with Electron + Vite + React. It merges file-backed notes, a Markdown graph, flashcards (with SM-2 scheduling), habits, and todos into one gamified productivity shell.
+Netherite is a desktop second-brain app built with Electron, Vite, React, and TypeScript. It brings together notes, flashcards, habits, and todos in one focused workspace with a game-inspired interface.
 
-### Key highlights
-- **Notes & graph**: Markdown workspace with Obsidian-style [[wikilinks]], bidirectional graph, attachment previews, Mermaid flowcharts, and canvas sketching with multi-page exports.
-- **Flashcards**: Markdown-based deck loader, SM-2 scheduling, review UI, embedded markdown rewrites, plus shared editor tooling (attachments, drawings, audio recording).
-- **Habits & todos**: Vault-scoped state powered by `localStorage`, integrated into the dashboard’s RPG-style status screen.
-- **Electron shell**: Custom main/preload bridges expose vault selection, file IO, dialogs, and window controls while keeping the renderer sandboxed.
+## Highlights
 
-### Getting started
-1. Run `npm install`.
-2. Launch development mode with `npm run dev`.
-3. Build for production: `npm run build` (output lands in `out/`).
+- Markdown notes with vault-based organization
+- Flashcards with spaced-repetition review
+- Habit and todo tracking in the same app
+- Attachment support for notes and study content
+- Electron desktop shell with a hardened preload bridge
 
-### Repo layout (important folders)
-- `/src/main` (Electron entry, IPC, file helpers).  
-- `/src/preload` (safe API spoon-fed to renderer).  
-- `/src/renderer/src` (React renderer, notes/flashcards/habits/todos).  
-- `/components`, `/app`, `/temp_baseline` (older snapshots—keep only if needed for reference).  
-- `/package.json`, `/electron.vite.config.ts`, `/tsconfig.*` (tooling config).
+## Stack
 
-### Development notes
-- Keep `.env` and vault directories out of the repo; use the provided `.gitignore`.
-- Run `npm run lint` / `npm run format` if those scripts exist, to keep styles consistent before pushing.
-- Refer to `LIVE_PREVIEW_FIXES.md` for editor-specific quirks (e.g., wikilink behavior and canvas reliability).
+- Electron
+- Vite
+- React
+- TypeScript
+- Tailwind CSS
+
+## Getting Started
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the app in development mode:
+
+```bash
+npm run dev
+```
+
+Create a production build:
+
+```bash
+npm run build
+```
+
+## Project Structure
+
+```text
+src/
+  main/       Electron main process
+  preload/    secure renderer bridge
+  renderer/   React frontend
+public/       static assets
+```
+
+## Notes
+
+- This export is prepared for GitHub upload.
+- It intentionally excludes local build output, `node_modules`, and workspace-only reference folders.
+- Auth/backend work is not included here.
+
+## Status
+
+This copy reflects the cleaned production-focused app source prepared from the local workspace.

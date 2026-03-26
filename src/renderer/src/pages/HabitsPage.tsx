@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Flame, Check, Plus, Trash2, Edit2, X, Star } from 'lucide-react'
 import { useHabits, Habit, updateScraps, scrapRewardForDifficulty } from '@/hooks/use-data'
+import { getLocalToday } from '@/lib/date'
 
 export default function HabitsPage() {
   const [habits, setHabits] = useHabits()
@@ -11,7 +12,7 @@ export default function HabitsPage() {
   const [description, setDescription] = useState('')
   const [difficulty, setDifficulty] = useState(1)
 
-  const todayStr = new Date().toISOString().split('T')[0]
+  const todayStr = getLocalToday()
 
   const handleSave = () => {
     if (!title.trim()) return

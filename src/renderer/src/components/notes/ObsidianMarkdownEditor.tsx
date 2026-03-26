@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import DOMPurify from 'dompurify'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { EditorState, StateEffect, StateField, type Range } from '@codemirror/state'
 import { autocompletion, startCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete'
@@ -61,7 +62,7 @@ const refreshDecorationsEffect = StateEffect.define<void>()
 mermaid.initialize({
   startOnLoad: false,
   theme: 'dark',
-  securityLevel: 'loose'
+  securityLevel: 'strict'
 })
 
 function overlapsSelection(from: number, to: number, selectionFrom: number, selectionTo: number) {
@@ -148,10 +149,10 @@ class MermaidWidget extends WidgetType {
     void mermaid
       .render(renderId, this.source)
       .then(({ svg }) => {
-        graph.innerHTML = svg
+        graph.innerHTML = DOMPurify.sanitize(svg)
       })
       .catch(() => {
-        graph.innerHTML = `<pre>${this.source}</pre>`
+        graph.innerHTML = DOMPurify.sanitize(`<pre>${this.source}</pre>`)
       })
 
     return wrapper
@@ -321,7 +322,7 @@ function createPreviewDecorationsField(
     update(_value, transaction) {
       if (
         transaction.docChanged ||
-        transaction.selectionSet ||
+        !transaction.startState.selection.eq(transaction.state.selection) ||
         transaction.effects.some((effect) => effect.is(refreshDecorationsEffect))
       ) {
         return buildPreviewDecorations(transaction.state, getNoteTitles, getAttachments)

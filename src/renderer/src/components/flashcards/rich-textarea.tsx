@@ -129,7 +129,7 @@ export function RichTextarea({
   const loadVaultContext = useCallback(async () => {
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
     if (!vaultPath) return
-    const nodes = await window.electronAPI.readFolder(vaultPath)
+    const nodes = await window.electronAPI.readFolder(vaultPath, { includeMarkdownContent: false })
     const context = collectVaultContext(nodes, vaultPath)
     setNoteTitles(context.noteTitles)
     setAttachmentItems(context.attachmentItems)
@@ -275,7 +275,8 @@ export function RichTextarea({
       await window.electronAPI.createFolder(`${vaultPath}/attachments`)
       const fileNames: string[] = []
 
-      for (const [index, dataUrl] of pages.entries()) {
+      for (let index = 0; index < pages.length; index += 1) {
+        const dataUrl = pages[index]
         const originalName = buildGeneratedAttachmentName(`Canvas page ${index + 1}`, '.png')
         const finalName = await ensureUniqueAttachmentName(originalName)
         const fullPath = `${vaultPath}/attachments/${finalName}`

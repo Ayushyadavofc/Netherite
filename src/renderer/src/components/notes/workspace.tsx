@@ -33,6 +33,7 @@ import {
   resolveAttachmentKind,
   type AttachmentItem
 } from '@/lib/attachments'
+import { Toaster, toast } from 'sonner'
 
 interface Note {
   id: string
@@ -154,7 +155,7 @@ export function Workspace() {
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
     if (!vaultPath) return
 
-    const fsNodes = await window.electronAPI.readFolder(vaultPath)
+    const fsNodes = await window.electronAPI.readFolder(vaultPath, { includeMarkdownContent: true })
     const loadedNotes: Note[] = []
     const folderMap = new Map<string, string[]>()
     const loadedAttachments: AttachmentItem[] = []
@@ -287,7 +288,17 @@ export function Workspace() {
   }, [])
 
   const saveNote = useCallback(async (note: Note, content: string) => {
-    await window.electronAPI.writeFile(note.fullPath, content)
+    try {
+      await window.electronAPI.writeFile(note.fullPath, content)
+      setNotes((currentNotes) =>
+        currentNotes.map((item) =>
+          item.id === note.id ? { ...item, content, updatedAt: 'Just now' } : item
+        )
+      )
+    } catch (err) {
+      toast.error('Save failed — your changes may not have been written to disk.')
+      console.error(err)
+    }
   }, [])
 
   const scheduleSave = useCallback(
@@ -305,11 +316,6 @@ export function Workspace() {
       setEditedContent(content)
       if (!selectedNote) return
 
-      setNotes((currentNotes) =>
-        currentNotes.map((note) =>
-          note.id === selectedNote.id ? { ...note, content, updatedAt: 'Just now' } : note
-        )
-      )
       scheduleSave(selectedNote, content)
     },
     [scheduleSave, selectedNote]
@@ -354,7 +360,13 @@ export function Workspace() {
     const relativePath = `notes/${safeTitle}.md`
     const fullPath = `${vaultPath}/${relativePath}`
     const content = `# ${safeTitle}\n\n`
-    await window.electronAPI.writeFile(fullPath, content)
+    try {
+      await window.electronAPI.writeFile(fullPath, content)
+    } catch (err) {
+      toast.error('Save failed — your changes may not have been written to disk.')
+      console.error(err)
+      return
+    }
 
     const newNote: Note = {
       id: crypto.randomUUID(),
@@ -503,7 +515,8 @@ export function Workspace() {
       await window.electronAPI.createFolder(`${vaultPath}/attachments`)
       const fileNames: string[] = []
 
-      for (const [index, dataUrl] of pages.entries()) {
+      for (let index = 0; index < pages.length; index += 1) {
+        const dataUrl = pages[index]
         const originalName = buildGeneratedAttachmentName(`Canvas page ${index + 1}`, '.png')
         const finalName = await ensureUniqueAttachmentName(originalName)
         const fullPath = `${vaultPath}/attachments/${finalName}`
@@ -587,8 +600,10 @@ export function Workspace() {
   ]
 
   return (
-    <div className="w-full h-full bg-[#0a0808]">
-      <PanelGroup direction="horizontal">
+    <>
+      <Toaster richColors theme="dark" />
+      <div className="w-full h-full bg-[#0a0808]">
+        <PanelGroup direction="horizontal">
         {showLeftPanel && (
           <>
             <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-r border-[#2a2422] bg-[#0a0808]">
@@ -835,78 +850,79 @@ export function Workspace() {
             </Panel>
           </>
         )}
-      </PanelGroup>
+        </PanelGroup>
 
-      {showCanvas && (
-        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="h-[min(88vh,820px)] w-[min(92vw,1120px)] max-w-full">
-            <AdvancedCanvas onInsert={insertCanvasPages} onClose={() => setShowCanvas(false)} />
+        {showCanvas && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+            <div className="h-[min(88vh,820px)] w-[min(92vw,1120px)] max-w-full">
+              <AdvancedCanvas onInsert={insertCanvasPages} onClose={() => setShowCanvas(false)} />
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {showGraphModal && (
-        <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm"
-          onClick={() => setShowGraphModal(false)}
-        >
+        {showGraphModal && (
           <div
-            className="flex h-[80vh] w-[85vw] flex-col overflow-hidden rounded-2xl border border-[#2a2422] bg-[#0a0808] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={() => setShowGraphModal(false)}
+          >
+            <div
+              className="flex h-[80vh] w-[85vw] flex-col overflow-hidden rounded-2xl border border-[#2a2422] bg-[#0a0808] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-[#2a2422] px-6 py-4">
+                <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#ffb77d]">Graph View</h2>
+                <button
+                  onClick={() => setShowGraphModal(false)}
+                  className="text-lg text-[#666666] transition-colors hover:text-white"
+                >
+                  X
+                </button>
+              </div>
+              <div className="flex-1">
+                <GraphView
+                  nodes={graph.nodes}
+                  edges={graph.edges}
+                  onNodeClick={(id) => {
+                    const note = notes.find((item) => item.id === id)
+                    if (note) openNote(note)
+                    setShowGraphModal(false)
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {contextMenu && (
+          <div
+            className="fixed z-[260] min-w-[220px] overflow-hidden rounded-xl border border-[#2a2422] bg-[#141212] shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-[#2a2422] px-6 py-4">
-              <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#ffb77d]">Graph View</h2>
-              <button
-                onClick={() => setShowGraphModal(false)}
-                className="text-lg text-[#666666] transition-colors hover:text-white"
-              >
-                X
-              </button>
+            <div className="border-b border-[#2a2422] px-4 py-2 text-[0.62rem] font-bold uppercase tracking-[0.22em] text-[#8c8079]">
+              Editor Actions
             </div>
-            <div className="flex-1">
-              <GraphView
-                nodes={graph.nodes}
-                edges={graph.edges}
-                onNodeClick={(id) => {
-                  const note = notes.find((item) => item.id === id)
-                  if (note) openNote(note)
-                  setShowGraphModal(false)
-                }}
-              />
+            <div className="py-1">
+              {contextActions.map((item) => (
+                <button
+                  key={item.label}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    item.action()
+                    setContextMenu(null)
+                  }}
+                  className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm text-[#ddd7d2] transition-colors hover:bg-[rgba(255,86,37,0.12)] hover:text-[#ffb77d]"
+                >
+                  <span>{item.label}</span>
+                  {item.label === 'Attach File' && <Paperclip className="h-4 w-4 text-[#8c8079]" />}
+                  {item.label.includes('Record') && <Mic className="h-4 w-4 text-[#8c8079]" />}
+                  {item.label === 'Sketch Canvas' && <PenTool className="h-4 w-4 text-[#8c8079]" />}
+                </button>
+              ))}
             </div>
           </div>
-        </div>
-      )}
-
-      {contextMenu && (
-        <div
-          className="fixed z-[260] min-w-[220px] overflow-hidden rounded-xl border border-[#2a2422] bg-[#141212] shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="border-b border-[#2a2422] px-4 py-2 text-[0.62rem] font-bold uppercase tracking-[0.22em] text-[#8c8079]">
-            Editor Actions
-          </div>
-          <div className="py-1">
-            {contextActions.map((item) => (
-              <button
-                key={item.label}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  item.action()
-                  setContextMenu(null)
-                }}
-                className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm text-[#ddd7d2] transition-colors hover:bg-[rgba(255,86,37,0.12)] hover:text-[#ffb77d]"
-              >
-                <span>{item.label}</span>
-                {item.label === 'Attach File' && <Paperclip className="h-4 w-4 text-[#8c8079]" />}
-                {item.label.includes('Record') && <Mic className="h-4 w-4 text-[#8c8079]" />}
-                {item.label === 'Sketch Canvas' && <PenTool className="h-4 w-4 text-[#8c8079]" />}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </>
   )
 }

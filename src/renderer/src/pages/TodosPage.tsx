@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Check, Plus, Trash2, Edit2, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Star } from 'lucide-react'
 import { useTodos, Todo, updateScraps, scrapRewardForDifficulty } from '@/hooks/use-data'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
+import { getLocalToday, parseLocalDate } from '@/lib/date'
 
 type TabType = 'Today' | 'This Week' | 'This Month' | 'This Year' | 'All'
 
@@ -13,13 +14,13 @@ export default function TodosPage() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [difficulty, setDifficulty] = useState(1)
-  const [dueDate, setDueDate] = useState(new Date().toISOString().split('T')[0])
+  const [dueDate, setDueDate] = useState(getLocalToday())
 
   const [activeTab, setActiveTab] = useState<TabType>('Today')
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   
   const [currentMonth, setCurrentMonth] = useState(new Date())
-  const todayStr = new Date().toISOString().split('T')[0]
+  const todayStr = getLocalToday()
 
   const handleSave = () => {
     if (!title.trim()) return
@@ -86,8 +87,8 @@ export default function TodosPage() {
   const isDateInTab = (dateStr: string, tab: TabType) => {
     if (tab === 'All') return true
     
-    const date = new Date(dateStr)
-    const today = new Date(todayStr)
+    const date = parseLocalDate(dateStr)
+    const today = parseLocalDate(todayStr)
     
     if (tab === 'Today') return dateStr === todayStr
     
@@ -117,7 +118,7 @@ export default function TodosPage() {
     return filtered.sort((a, b) => {
       if (a.completed !== b.completed) return a.completed ? 1 : -1
       if (a.difficulty !== b.difficulty) return b.difficulty - a.difficulty
-      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()
+      return parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime()
     })
   }, [todos, activeTab, selectedDate, todayStr])
 
@@ -212,7 +213,7 @@ export default function TodosPage() {
                   {dayTodos.length > 0 && (
                     <div className="absolute left-1/2 -top-2 -translate-x-1/2 -translate-y-full hidden group-hover:flex flex-col gap-2 z-[100] w-48 p-4 bg-[#141212] border border-[#2a2422] shadow-[0_0_16px_rgba(255,86,37,0.2)] rounded-lg pointer-events-none">
                       <p className="text-[0.6rem] uppercase tracking-widest font-bold border-b border-[#2a2422] pb-2 text-[#a8a0a0]">
-                        {new Date(dateStr).toLocaleDateString(undefined, {month:'short', day:'numeric'})}
+                        {parseLocalDate(dateStr).toLocaleDateString(undefined, {month:'short', day:'numeric'})}
                       </p>
                       {dayTodos.map(t => (
                         <div key={t.id} className="flex items-center gap-2">
@@ -237,7 +238,7 @@ export default function TodosPage() {
                 </h3>
                 <button onClick={() => setSelectedDate(null)} className="text-[0.6rem] uppercase font-bold text-[#a8a0a0] hover:text-white">Clear</button>
               </div>
-              <p className="text-sm font-bold text-[#ffb77d] uppercase tracking-widest">{new Date(selectedDate).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</p>
+              <p className="text-sm font-bold text-[#ffb77d] uppercase tracking-widest">{parseLocalDate(selectedDate).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</p>
             </div>
           )}
         </aside>
@@ -396,7 +397,7 @@ export default function TodosPage() {
                           <div className="flex items-center gap-3 mt-1 text-xs">
                             <span className={`flex items-center gap-1 uppercase tracking-widest text-[0.6rem] font-bold ${todo.completed ? 'text-[#666666]' : isLate ? 'text-[#ff7043]' : 'text-[#666666]'}`}>
                               <Clock className="w-3 h-3" />
-                              {todo.dueDate === todayStr ? 'Today' : new Date(todo.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                              {todo.dueDate === todayStr ? 'Today' : parseLocalDate(todo.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                               {isLate && ' (Overdue)'}
                             </span>
                             {todo.description && (

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FolderPlus, FolderOpen, ChevronRight, X } from 'lucide-react'
+import { Toaster, toast } from 'sonner'
 import ProfileButton from '@/components/ProfileButton'
 import TitleBar from '@/components/TitleBar'
 
@@ -11,7 +12,7 @@ interface VaultFileNode {
   type: 'file'
   name: string
   path: string
-  content: string
+  content?: string
 }
 
 interface VaultFolderNode {
@@ -36,7 +37,7 @@ interface Vault {
 /* ── Helpers ───────────────────────────────────────── */
 
 function fsNodesToVaultTree(
-  nodes: { name: string; type: string; path: string; children?: any[]; content?: string }[]
+  nodes: { name: string; type: string; path: string; children?: any[] }[]
 ): VaultNode[] {
   return nodes.map((n) => {
     if (n.type === 'folder') {
@@ -52,10 +53,25 @@ function fsNodesToVaultTree(
       id: crypto.randomUUID(),
       type: 'file' as const,
       name: n.name,
-      path: n.path,
-      content: n.content ?? ''
+      path: n.path
     }
   })
+}
+
+function sanitizeVaultName(name: string): string {
+  return name
+    .replace(/[/\\]/g, '')
+    .replace(/\.\./g, '')
+    .replace(/[<>:"|?*]/g, '')
+    .trim()
+}
+
+function normalizeStoredPath(dirPath: string | null) {
+  return dirPath ? dirPath.replace(/\\/g, '/') : null
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
 }
 
 /* ── Component ─────────────────────────────────────── */
@@ -73,14 +89,19 @@ export default function LandingPage() {
         const parsed: Vault[] = JSON.parse(saved)
         let needsMigration = false
         const migrated = parsed.map((v) => {
-          if (!v.id) {
-            needsMigration = true
-            return { ...v, id: crypto.randomUUID(), tree: v.tree ?? [] }
+          const nextVault: Vault = {
+            ...v,
+            id: v.id || crypto.randomUUID(),
+            tree: Array.isArray(v.tree) ? v.tree : []
           }
-          return v
+          if (!v.id || 'tree' in v) {
+            needsMigration = true
+          }
+          return nextVault
         })
         if (needsMigration) {
-          localStorage.setItem('netherite-vaults', JSON.stringify(migrated))
+          persistVaults(migrated)
+          return
         }
         setVaults(migrated)
       } catch {
@@ -91,12 +112,21 @@ export default function LandingPage() {
 
   const persistVaults = (updated: Vault[]) => {
     setVaults(updated)
-    localStorage.setItem('netherite-vaults', JSON.stringify(updated))
+    const stripped = updated.map(({ tree, ...meta }) => ({
+      ...meta
+    }))
+    localStorage.setItem('netherite-vaults', JSON.stringify(stripped))
   }
 
   /* ── Create New Vault ─────────────────────────────── */
   const createVault = async () => {
     if (!newVaultName.trim()) return
+
+    const safeName = sanitizeVaultName(newVaultName)
+    if (!safeName) {
+      toast.error('Vault name is invalid.')
+      return
+    }
 
     const vaultName = newVaultName.trim()
     const now = new Date().toISOString()
@@ -108,18 +138,18 @@ export default function LandingPage() {
     const selectedPath = await window.electronAPI.selectFolder()
     if (!selectedPath) return // user cancelled
 
-    // Create vault root + subfolders
-    const dirPath = `${selectedPath}/${vaultName}`
-    await window.electronAPI.createFolder(dirPath)
-    await window.electronAPI.createFolder(`${dirPath}/notes`)
-    await window.electronAPI.createFolder(`${dirPath}/flashcards`)
-    await window.electronAPI.createFolder(`${dirPath}/settings`)
-    await window.electronAPI.writeFile(`${dirPath}/notes/Welcome.md`, welcomeContent)
+    let dirPath: string
+    try {
+      dirPath = await window.electronAPI.createVault(selectedPath, safeName, welcomeContent)
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Could not create vault.'))
+      return
+    }
 
     const newVault: Vault = {
       id: vaultId,
       name: vaultName,
-      dirPath,
+      dirPath: normalizeStoredPath(dirPath),
       createdAt: now,
       lastOpened: now,
       tree: [
@@ -133,8 +163,7 @@ export default function LandingPage() {
               id: crypto.randomUUID(),
               type: 'file',
               name: 'Welcome.md',
-              path: 'notes/Welcome.md',
-              content: welcomeContent
+              path: 'notes/Welcome.md'
             }
           ]
         },
@@ -147,7 +176,7 @@ export default function LandingPage() {
     persistVaults(updated)
     localStorage.setItem('netherite-current-vault', vaultName)
     localStorage.setItem('netherite-current-vault-id', vaultId)
-    localStorage.setItem('netherite-current-vault-path', dirPath)
+    localStorage.setItem('netherite-current-vault-path', normalizeStoredPath(dirPath))
 
     setShowCreateModal(false)
     setNewVaultName('')
@@ -159,23 +188,38 @@ export default function LandingPage() {
     const selectedPath = await window.electronAPI.selectFolder()
     if (!selectedPath) return
 
-    const now = new Date().toISOString()
-    const vaultName = selectedPath.split('/').pop() || selectedPath.split('\\').pop() || 'Vault'
+    let activatedPath: string
+    try {
+      activatedPath = await window.electronAPI.activateVault(selectedPath)
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Could not open that vault.'))
+      return
+    }
 
-    const fsNodes = await window.electronAPI.readFolder(selectedPath)
+    const now = new Date().toISOString()
+    const vaultName =
+      activatedPath.split('/').pop() || activatedPath.split('\\').pop() || 'Vault'
+
+    const normalizedActivatedPath = normalizeStoredPath(activatedPath)
+    const existingVault = vaults.find(
+      (v) => normalizeStoredPath(v.dirPath) === normalizedActivatedPath
+    )
+    const vaultId = existingVault?.id ?? crypto.randomUUID()
+    const fsNodes = await window.electronAPI.readFolder(activatedPath)
     const tree = fsNodesToVaultTree(fsNodes)
 
-    const vaultId = crypto.randomUUID()
     const newVault: Vault = {
       id: vaultId,
       name: vaultName,
-      dirPath: selectedPath,
+      dirPath: normalizedActivatedPath,
       createdAt: now,
       lastOpened: now,
       tree
     }
 
-    const existing = vaults.findIndex((v) => v.name === vaultName)
+    const existing = vaults.findIndex(
+      (v) => normalizeStoredPath(v.dirPath) === normalizedActivatedPath
+    )
     let updated: Vault[]
     if (existing !== -1) {
       updated = [...vaults]
@@ -187,19 +231,30 @@ export default function LandingPage() {
     persistVaults(updated)
     localStorage.setItem('netherite-current-vault', vaultName)
     localStorage.setItem('netherite-current-vault-id', vaultId)
-    localStorage.setItem('netherite-current-vault-path', selectedPath)
+    localStorage.setItem('netherite-current-vault-path', normalizedActivatedPath)
     navigate('/dashboard')
   }
 
   /* ── Re-open recent ───────────────────────────────── */
   const openRecentVault = async (vault: Vault) => {
     if (vault.dirPath) {
-      const fsNodes = await window.electronAPI.readFolder(vault.dirPath)
+      let activatedPath: string
+      try {
+        activatedPath = await window.electronAPI.activateVault(vault.dirPath)
+      } catch (error) {
+        toast.error(getErrorMessage(error, 'This vault is no longer authorized. Re-open it from disk.'))
+        return
+      }
+
+      const fsNodes = await window.electronAPI.readFolder(activatedPath)
       const tree = fsNodesToVaultTree(fsNodes)
       const updated = vaults.map((v) =>
-        v.id === vault.id ? { ...v, lastOpened: new Date().toISOString(), tree } : v
+        v.id === vault.id
+          ? { ...v, dirPath: normalizeStoredPath(activatedPath), lastOpened: new Date().toISOString(), tree }
+          : v
       )
       persistVaults(updated)
+      localStorage.setItem('netherite-current-vault-path', normalizeStoredPath(activatedPath))
     } else {
       const updated = vaults.map((v) =>
         v.id === vault.id ? { ...v, lastOpened: new Date().toISOString() } : v
@@ -208,7 +263,6 @@ export default function LandingPage() {
     }
     localStorage.setItem('netherite-current-vault', vault.name)
     localStorage.setItem('netherite-current-vault-id', vault.id)
-    if (vault.dirPath) localStorage.setItem('netherite-current-vault-path', vault.dirPath)
     navigate('/dashboard')
   }
 
@@ -229,6 +283,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0808] flex flex-col">
+      <Toaster richColors theme="dark" />
       <TitleBar minimal />
 
       {/* Header */}

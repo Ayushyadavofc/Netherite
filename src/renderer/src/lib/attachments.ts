@@ -15,7 +15,7 @@ export function normalizePath(path: string) {
 
 export function getAttachmentUrl(fullPath: string) {
   const normalized = normalizePath(fullPath).replace(/^\/([A-Za-z]:)/, '$1')
-  return encodeURI(`file:///${normalized}`)
+  return encodeURI(`local-file:///${normalized}`)
 }
 
 export function detectAttachmentKind(name: string): AttachmentKind {

@@ -1,6 +1,8 @@
 export interface ElectronAPI {
   selectFolder: () => Promise<string | null>
-  readFolder: (dirPath: string) => Promise<FsNode[]>
+  activateVault: (vaultPath: string) => Promise<string>
+  createVault: (parentPath: string, vaultName: string, welcomeContent: string) => Promise<string>
+  readFolder: (dirPath: string, options?: { includeMarkdownContent?: boolean }) => Promise<FsNode[]>
   readFile: (filePath: string) => Promise<string>
   fileExists: (filePath: string) => Promise<boolean>
   writeFile: (filePath: string, content: string) => Promise<boolean>

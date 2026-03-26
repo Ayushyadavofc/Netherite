@@ -47,7 +47,7 @@ export function resolveWikilink(
       
       return {
         type,
-        path: `file:///${finalPath}`,
+        path: `local-file:///${finalPath}`,
         name: fileName
       };
     }

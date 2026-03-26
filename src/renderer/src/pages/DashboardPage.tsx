@@ -2,6 +2,7 @@ import { PixelCharacter } from '@/components/dashboard/PixelCharacter'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
 import { Flame, CheckSquare, BookOpen, Zap, ShoppingBag, Sparkles, Sword, Heart, Wand2, Brain } from 'lucide-react'
 import { useProfile, useScraps, useStreak, useTodos, useHabits } from '@/hooks/use-data'
+import { formatLocalDate, getLocalToday } from '@/lib/date'
 
 const nextUnlocks = [
   { name: "Shadow Gi", price: 250, rarity: "Rare", color: "#4a6fa5" },
@@ -36,7 +37,7 @@ export default function DashboardPage() {
   const [todos] = useTodos()
   const [habits] = useHabits()
 
-  const todayStr = new Date().toISOString().split('T')[0]
+  const todayStr = getLocalToday()
 
   const level = Math.max(1, Math.floor(Math.sqrt(scraps / 100)) + 1)
   const currentLevelMaxXP = Math.pow(level, 2) * 100
@@ -59,7 +60,7 @@ export default function DashboardPage() {
     let count = 0
     const d = new Date()
     for (let i = 0; i < 30; i++) {
-      const dateStr = d.toISOString().split('T')[0]
+      const dateStr = formatLocalDate(d)
       const dayTodos = todos.filter(t => t.dueDate === dateStr)
       if (dayTodos.length > 0 && dayTodos.every(t => t.completed)) {
         count++
@@ -75,7 +76,7 @@ export default function DashboardPage() {
     let count = 0
     const d = new Date()
     for (let i = 0; i < 30; i++) {
-      const dateStr = d.toISOString().split('T')[0]
+      const dateStr = formatLocalDate(d)
       if (habits.length > 0 && habits.every(h => h.completedDates.includes(dateStr))) {
         count++
       } else if (habits.length > 0) {

@@ -5,6 +5,7 @@ import { StatsOverview } from '@/components/flashcards/stats-overview'
 import { RichTextarea } from '@/components/flashcards/rich-textarea'
 import { extractMarkdownPreviewText } from '@/components/shared/MarkdownContent'
 import { detectAttachmentKind, normalizePath, type AttachmentItem } from '@/lib/attachments'
+import { Toaster, toast } from 'sonner'
 
 export type CardState = 'new' | 'learning' | 'review' | 'relearning'
 
@@ -209,8 +210,9 @@ export function calculateSM2(
     }
   }
 
-  const nextReview = now + interval * 60 * 1000
-  return { reps, interval, ease, nextReview, state, step, lapses }
+  const safeInterval = isNaN(interval) || interval <= 0 ? 1 : interval
+  const nextReview = now + safeInterval * 60 * 1000
+  return { reps, interval: safeInterval, ease, nextReview, state, step, lapses }
 }
 
 function parseDeckFile(content: string, fileName: string): Deck {
@@ -281,6 +283,15 @@ function formatInterval(mins: number) {
   return `${Math.round(days)}d`
 }
 
+const isAbsolutePathLike = (value: string) => /^[A-Za-z]:[/\\]/.test(value) || value.startsWith('/')
+
+const isInsideVault = (filePath: string, vaultPath: string): boolean => {
+  const normalizeForCompare = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const resolved = normalizeForCompare(filePath)
+  const vaultResolved = normalizeForCompare(vaultPath)
+  return resolved.startsWith(`${vaultResolved}/`)
+}
+
 function collectAttachmentItems(nodes: any[], vaultPath: string) {
   const attachments: AttachmentItem[] = []
 
@@ -333,7 +344,7 @@ export default function FlashcardsPage() {
     } catch {}
 
     try {
-      const files = await window.electronAPI.readFolder(flashcardsDir)
+      const files = await window.electronAPI.readFolder(flashcardsDir, { includeMarkdownContent: true })
       const deckFiles = files.filter((f: any) => f.type === 'file' && f.name.endsWith('.md'))
 
       const loadedDecks: Deck[] = []
@@ -360,10 +371,15 @@ export default function FlashcardsPage() {
         }
       } catch(e) {}
 
-      for (const p of externalPaths) {
+      for (const deckPath of externalPaths) {
+        if (!isInsideVault(deckPath, vaultPath)) {
+          console.warn('Blocked external deck path outside vault:', deckPath)
+          continue
+        }
+
         try {
-          const content = await window.electronAPI.readFile(p)
-          loadedDecks.push(parseDeckFile(content, p))
+          const content = await window.electronAPI.readFile(deckPath)
+          loadedDecks.push(parseDeckFile(content, deckPath))
         } catch(e) {}
       }
 
@@ -378,7 +394,7 @@ export default function FlashcardsPage() {
     if (!vaultPath) return
 
     try {
-      const nodes = await window.electronAPI.readFolder(vaultPath)
+      const nodes = await window.electronAPI.readFolder(vaultPath, { includeMarkdownContent: false })
       setAttachmentItems(collectAttachmentItems(nodes, vaultPath))
     } catch (err) {
       console.error('Failed to load flashcard attachments:', err)
@@ -392,8 +408,8 @@ export default function FlashcardsPage() {
 
   const saveDeck = async (deck: Deck) => {
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
-    if (!vaultPath) return
-    const isAbsolute = deck.fileName.includes(':\\') || deck.fileName.startsWith('/')
+    if (!vaultPath) return false
+    const isAbsolute = isAbsolutePathLike(deck.fileName)
     const fullPath = isAbsolute ? deck.fileName : `${vaultPath}/flashcards/${deck.fileName}`
 
     let content = `# ${deck.name}\n`
@@ -408,8 +424,11 @@ export default function FlashcardsPage() {
     try {
       await window.electronAPI.writeFile(fullPath, content)
       setDecks(prev => prev.map(d => d.id === deck.id ? deck : d))
+      return true
     } catch (err) {
+      toast.error('Save failed — your changes may not have been written to disk.')
       console.error('Failed to save deck:', err)
+      return false
     }
   }
 
@@ -467,7 +486,8 @@ export default function FlashcardsPage() {
       updatedDeck.newCards = updatedDeck.cards.filter(c => c.sm2.reps === 0).length
       updatedDeck.dueToday = updatedDeck.cards.filter(c => c.sm2.reps > 0 && c.sm2.nextReview <= Date.now()).length
       
-      await saveDeck(updatedDeck)
+      const saved = await saveDeck(updatedDeck)
+      if (!saved) return
     }
 
     if (currentCardIndex < studyCards.length - 1) {
@@ -480,15 +500,21 @@ export default function FlashcardsPage() {
 
   const handleCreateDeckSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newDeckName.trim()) return
+
+    const safeDeckName = newDeckName
+      .replace(/[/\\]/g, '')
+      .replace(/\.\./g, '')
+      .trim()
+
+    if (!safeDeckName) return
 
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
     if (!vaultPath) return
 
-    const fileName = `${newDeckName.trim()}.md`
+    const fileName = `${safeDeckName}.md`
     const newDeck: Deck = {
       id: fileName,
-      name: newDeckName.trim(),
+      name: safeDeckName,
       fileName,
       cards: [],
       total: 0,
@@ -499,7 +525,8 @@ export default function FlashcardsPage() {
       settings: { ...defaultDeckSettings }
     }
 
-    await saveDeck(newDeck)
+    const saved = await saveDeck(newDeck)
+    if (!saved) return
     setDecks([...decks, newDeck])
     setShowCreateDeck(false)
     setNewDeckName("")
@@ -520,7 +547,8 @@ export default function FlashcardsPage() {
     updatedDeck.total++
     updatedDeck.newCards++
 
-    await saveDeck(updatedDeck)
+    const saved = await saveDeck(updatedDeck)
+    if (!saved) return
     await loadAttachmentItems()
     setShowAddCard(false)
     setNewQuestion("")
@@ -559,6 +587,11 @@ export default function FlashcardsPage() {
     } catch(e) {}
 
     const normalizedPath = filePath.replace(/\\/g, '/')
+    if (!isInsideVault(normalizedPath, vaultPath)) {
+      console.warn('Blocked external deck path outside vault:', normalizedPath)
+      return
+    }
+
     if (!externalPaths.includes(normalizedPath)) {
       externalPaths.push(normalizedPath)
       await window.electronAPI.writeFile(externalRefsPath, JSON.stringify(externalPaths, null, 2))
@@ -584,7 +617,8 @@ export default function FlashcardsPage() {
     e.preventDefault()
     if (!selectedDeck) return
     const updatedDeck = { ...selectedDeck, settings: deckSettingsForm }
-    await saveDeck(updatedDeck)
+    const saved = await saveDeck(updatedDeck)
+    if (!saved) return
     setShowSettings(false)
   }
 
@@ -610,6 +644,7 @@ export default function FlashcardsPage() {
 
   return (
     <div className="flex w-full h-full bg-[#0a0808]">
+      <Toaster richColors theme="dark" />
       {/* Sidebar */}
       <aside className="hidden lg:flex flex-col w-64 shrink-0 z-10 sticky top-0 h-[calc(100vh-48px)] overflow-y-auto border-r border-[#2a2422] bg-[#0a0808]">
         {/* Header */}
@@ -914,12 +949,12 @@ export default function FlashcardsPage() {
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">New cards/day</label>
                     <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.newCardsPerDay} onChange={e => setDeckSettingsForm(p => ({...p, newCardsPerDay: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.newCardsPerDay} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, newCardsPerDay: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Maximum reviews/day</label>
                     <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.maximumReviewsPerDay} onChange={e => setDeckSettingsForm(p => ({...p, maximumReviewsPerDay: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.maximumReviewsPerDay} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, maximumReviewsPerDay: val})) } }} />
                   </div>
                   <div className="flex items-center justify-between">
                     <label className="text-xs text-[#a8a0a0] font-bold">New cards ignore review limit</label>
@@ -944,12 +979,12 @@ export default function FlashcardsPage() {
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Graduating Interval (days)</label>
                     <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.graduatingInterval} onChange={e => setDeckSettingsForm(p => ({...p, graduatingInterval: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.graduatingInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, graduatingInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Easy Interval (days)</label>
                     <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.easyInterval} onChange={e => setDeckSettingsForm(p => ({...p, easyInterval: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.easyInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, easyInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Insertion order</label>
@@ -975,12 +1010,12 @@ export default function FlashcardsPage() {
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Minimum Interval (days)</label>
                     <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.minimumInterval} onChange={e => setDeckSettingsForm(p => ({...p, minimumInterval: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.minimumInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, minimumInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Leech threshold</label>
                     <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.leechThreshold} onChange={e => setDeckSettingsForm(p => ({...p, leechThreshold: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.leechThreshold} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, leechThreshold: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Leech action</label>
@@ -1001,33 +1036,33 @@ export default function FlashcardsPage() {
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Maximum interval (days)</label>
                     <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.maximumInterval} onChange={e => setDeckSettingsForm(p => ({...p, maximumInterval: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.maximumInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, maximumInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Starting ease</label>
                     <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.startingEase} onChange={e => setDeckSettingsForm(p => ({...p, startingEase: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.startingEase} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, startingEase: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Easy bonus</label>
                     <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.easyBonus} onChange={e => setDeckSettingsForm(p => ({...p, easyBonus: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.easyBonus} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, easyBonus: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-[#a8a0a0] font-bold">Interval modifier</label>
                     <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                      value={deckSettingsForm.intervalModifier} onChange={e => setDeckSettingsForm(p => ({...p, intervalModifier: parseFloat(e.target.value)}))} />
+                      value={deckSettingsForm.intervalModifier} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, intervalModifier: val})) } }} />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-[#a8a0a0] font-bold">Hard interval</label>
                       <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                        value={deckSettingsForm.hardInterval} onChange={e => setDeckSettingsForm(p => ({...p, hardInterval: parseFloat(e.target.value)}))} />
+                        value={deckSettingsForm.hardInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, hardInterval: val})) } }} />
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-[#a8a0a0] font-bold">New interval</label>
                       <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                        value={deckSettingsForm.newInterval} onChange={e => setDeckSettingsForm(p => ({...p, newInterval: parseFloat(e.target.value)}))} />
+                        value={deckSettingsForm.newInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, newInterval: val})) } }} />
                     </div>
                   </div>
                 </div>
@@ -1090,7 +1125,7 @@ export default function FlashcardsPage() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-[#a8a0a0] font-bold">Maximum answer seconds</label>
                       <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                        value={deckSettingsForm.maximumAnswerSeconds} onChange={e => setDeckSettingsForm(p => ({...p, maximumAnswerSeconds: parseFloat(e.target.value)}))} />
+                        value={deckSettingsForm.maximumAnswerSeconds} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, maximumAnswerSeconds: val})) } }} />
                     </div>
                     <div className="flex items-center justify-between">
                       <label className="text-xs text-[#a8a0a0] font-bold">Show on-screen timer</label>
@@ -1144,12 +1179,12 @@ export default function FlashcardsPage() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-[#a8a0a0] font-bold">Seconds to show question for</label>
                       <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                        value={deckSettingsForm.secondsToShowQuestion} onChange={e => setDeckSettingsForm(p => ({...p, secondsToShowQuestion: parseFloat(e.target.value)}))} />
+                        value={deckSettingsForm.secondsToShowQuestion} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, secondsToShowQuestion: val})) } }} />
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-[#a8a0a0] font-bold">Seconds to show answer for</label>
                       <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
-                        value={deckSettingsForm.secondsToShowAnswer} onChange={e => setDeckSettingsForm(p => ({...p, secondsToShowAnswer: parseFloat(e.target.value)}))} />
+                        value={deckSettingsForm.secondsToShowAnswer} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, secondsToShowAnswer: val})) } }} />
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-[#a8a0a0] font-bold">Question action</label>

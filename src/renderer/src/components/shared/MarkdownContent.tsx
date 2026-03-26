@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ComponentPropsWithoutRef } from 'react'
+import DOMPurify from 'dompurify'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import mermaid from 'mermaid'
@@ -10,7 +11,7 @@ if (!mermaidInitialized) {
   mermaid.initialize({
     startOnLoad: false,
     theme: 'dark',
-    securityLevel: 'loose'
+    securityLevel: 'strict'
   })
   mermaidInitialized = true
 }
@@ -25,6 +26,20 @@ interface MarkdownContentProps {
 function isProbablyHtmlContent(content: string) {
   return /<\s*(div|span|p|img|audio|video|br|strong|em|ul|ol|li|table|h[1-6])[\s>]/i.test(content)
 }
+
+const isSafeUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url)
+    return ['https:', 'http:'].includes(parsed.protocol)
+  } catch {
+    return false
+  }
+}
+
+const sanitizeHtml = (content: string) =>
+  DOMPurify.sanitize(content, {
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|local-file|attachment|note):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+  })
 
 function preprocessMarkdown(content: string, attachmentItems: AttachmentItem[]) {
   return content
@@ -52,7 +67,7 @@ function resolveAttachmentFromHref(href: string, attachmentItems: AttachmentItem
     return resolveAttachment(attachmentItems, href)
   }
 
-  if (href.startsWith('file:///')) {
+  if (href.startsWith('file:///') || href.startsWith('local-file://')) {
     return (
       attachmentItems.find((item) => getAttachmentUrl(item.fullPath) === href) ||
       attachmentItems.find((item) => decodeURI(getAttachmentUrl(item.fullPath)) === decodeURI(href)) ||
@@ -142,9 +157,9 @@ function MermaidBlock({ source }: { source: string }) {
   }
 
   return (
-    <div
-      className="my-4 overflow-x-auto rounded-xl border border-[#2a2422] bg-[#111111] p-4"
-      dangerouslySetInnerHTML={{ __html: svg }}
+      <div
+        className="my-4 overflow-x-auto rounded-xl border border-[#2a2422] bg-[#111111] p-4"
+      dangerouslySetInnerHTML={{ __html: sanitizeHtml(svg) }}
     />
   )
 }
@@ -179,7 +194,7 @@ export function MarkdownContent({
     return (
       <div
         className={className}
-        dangerouslySetInnerHTML={{ __html: content.replace(/local-file:\/\//g, 'file:///') }}
+        dangerouslySetInnerHTML={{ __html: sanitizeHtml(content.replace(/file:\/\//g, 'local-file://')) }}
       />
     )
   }
@@ -229,6 +244,10 @@ export function MarkdownContent({
               return renderAttachment(attachment)
             }
 
+            if (!isSafeUrl(href)) {
+              return <span>{children}</span>
+            }
+
             return (
               <a
                 href={href}
@@ -252,7 +271,11 @@ export function MarkdownContent({
               />
             )
           },
-          code: ({ inline, className: codeClassName, children }) => {
+          code: ({
+            inline,
+            className: codeClassName,
+            children
+          }: ComponentPropsWithoutRef<'code'> & { inline?: boolean }) => {
             const source = String(children).replace(/\n$/, '')
             const language = codeClassName?.replace('language-', '') || ''
 

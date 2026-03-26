@@ -2,7 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: () => ipcRenderer.invoke('selectFolder'),
-  readFolder: (dirPath: string) => ipcRenderer.invoke('readFolder', dirPath),
+  activateVault: (vaultPath: string) => ipcRenderer.invoke('activateVault', vaultPath),
+  createVault: (parentPath: string, vaultName: string, welcomeContent: string) =>
+    ipcRenderer.invoke('createVault', parentPath, vaultName, welcomeContent),
+  readFolder: (dirPath: string, options?: { includeMarkdownContent?: boolean }) =>
+    ipcRenderer.invoke('readFolder', dirPath, options),
   readFile: (filePath: string) => ipcRenderer.invoke('readFile', filePath),
   fileExists: (filePath: string) => ipcRenderer.invoke('fileExists', filePath),
   writeFile: (filePath: string, content: string) =>
