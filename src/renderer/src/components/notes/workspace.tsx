@@ -1,29 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   ChevronDown,
   ChevronRight,
   FileText,
   Folder,
+  FolderPlus,
   Maximize2,
   Mic,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Paperclip,
   PenTool,
   Plus,
   Search,
-  Paperclip,
   Square
 } from 'lucide-react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { Toaster, toast } from 'sonner'
 
-import { GraphView, type GraphEdge, type GraphNode } from './GraphView'
 import { AdvancedCanvas } from '../ui/AdvancedCanvas'
-import {
-  ObsidianMarkdownEditor,
-  type MarkdownEditorHandle
-} from './ObsidianMarkdownEditor'
+import { GraphView } from './GraphView'
+import { ObsidianMarkdownEditor, type MarkdownEditorHandle } from './ObsidianMarkdownEditor'
 import {
   buildGeneratedAttachmentName,
   buildImportedAttachmentName,
@@ -33,9 +32,16 @@ import {
   resolveAttachmentKind,
   type AttachmentItem
 } from '@/lib/attachments'
-import { Toaster, toast } from 'sonner'
 
-interface Note {
+interface FsNode {
+  name: string
+  type: 'file' | 'folder'
+  path: string
+  children?: FsNode[]
+  content?: string
+}
+
+interface NoteRecord {
   id: string
   title: string
   content: string
@@ -47,59 +53,106 @@ interface Note {
   openedAt: string
 }
 
-interface FolderItem {
+interface FolderRecord {
   name: string
   expanded: boolean
   noteIds: string[]
 }
 
-interface HeadingItem {
-  level: number
-  text: string
-  lineIndex: number
+interface ContextMenuState {
+  x: number
+  y: number
 }
 
-const RESERVED_FOLDERS = new Set(['notes', 'flashcards', 'settings', 'attachments'])
-const OUTSIDE_JUNK = 'outside junk'
+interface GraphNode {
+  id: string
+  label: string
+}
 
-function parseHeadings(content: string): HeadingItem[] {
-  return content
+interface GraphEdge {
+  from: string
+  to: string
+}
+
+const RESERVED_FOLDERS = new Set(['notes', 'flashcards', 'settings', 'attachments', '.netherite'])
+const OUTSIDE_JUNK = 'outside junk'
+const ACTIVE_NOTE_PATH_KEY = 'netherite-active-note-path'
+const ACTIVE_NOTE_EDITING_KEY = 'netherite-active-note-editing'
+const ACTIVE_NOTE_CONTENT_KEY = 'netherite-active-note-content'
+
+const normalizeAbsolutePath = (value: string) => normalizePath(value).replace(/\/+$/, '')
+
+const syncWorkspaceState = (key: string, value: string | null, options?: { emit?: boolean }) => {
+  if (value === null) {
+    window.localStorage.removeItem(key)
+  } else {
+    window.localStorage.setItem(key, value)
+  }
+
+  if (options?.emit) {
+    window.dispatchEvent(new Event('local-storage'))
+  }
+}
+
+const joinPath = (basePath: string, relativePath = '') => {
+  const normalizedBase = normalizeAbsolutePath(basePath)
+  const normalizedRelative = normalizePath(relativePath).replace(/^\/+/, '')
+  return normalizedRelative ? `${normalizedBase}/${normalizedRelative}` : normalizedBase
+}
+
+const getDisplayDate = () =>
+  new Date().toLocaleString(void 0, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+
+const slugifyBaseName = (name: string) =>
+  name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim() || 'Untitled Note'
+
+const formatFolderLabel = (name: string) =>
+  name
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    ?.replace(/[-_]+/g, ' ')
+    .trim() || name
+
+const parseHeadings = (content: string) =>
+  content
     .split('\n')
     .map((line, index) => {
       const match = line.match(/^(#{1,6})\s+(.+)/)
-      if (!match) return null
+      if (!match) {
+        return null
+      }
+
       return {
         level: match[1].length,
         text: match[2],
         lineIndex: index
       }
     })
-    .filter((item): item is HeadingItem => item !== null)
-}
+    .filter((item): item is { level: number; text: string; lineIndex: number } => item !== null)
 
-function parseNoteLinks(content: string): string[] {
+const parseNoteLinks = (content: string) => {
   const links: string[] = []
   const regex = /!?\[\[([^\n]*?)\]\]/g
   let match: RegExpExecArray | null
 
   while ((match = regex.exec(content)) !== null) {
-    if (match[0].startsWith('![[')) continue
+    if (match[0].startsWith('![[')) {
+      continue
+    }
+
     links.push(match[1].trim())
   }
 
   return links
 }
 
-function getDisplayDate() {
-  return new Date().toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
-
-function buildGraph(notes: Note[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
+const buildGraph = (notes: NoteRecord[]): { nodes: GraphNode[]; edges: GraphEdge[] } => {
   const linkableNotes = notes.filter((note) => note.linkable)
   const titleToId = new Map(linkableNotes.map((note) => [note.title.toLowerCase(), note.id]))
   const nodes = linkableNotes.map((note) => ({ id: note.id, label: note.title }))
@@ -117,148 +170,328 @@ function buildGraph(notes: Note[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
   return { nodes, edges }
 }
 
-function slugifyBaseName(name: string) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim() || 'Untitled Note'
+const getCurrentVaultPath = () => window.localStorage.getItem('netherite-current-vault-path')
+const getNotesRootPath = (vaultPath: string) => joinPath(vaultPath, 'notes')
+const getNotesInnerPath = (notePath: string) => normalizePath(notePath).replace(/^notes\//i, '')
+
+const getParentRelativePath = (relativePath: string) => {
+  const normalizedPath = normalizePath(relativePath).replace(/^\/+|\/+$/g, '')
+  const lastSlash = normalizedPath.lastIndexOf('/')
+  return lastSlash === -1 ? '' : normalizedPath.slice(0, lastSlash)
 }
 
+const buildAncestorFolderPaths = (relativePath: string) => {
+  const normalizedPath = normalizePath(relativePath).replace(/^\/+|\/+$/g, '')
+  if (!normalizedPath) {
+    return []
+  }
+
+  const parts = normalizedPath.split('/').filter(Boolean)
+  const ancestors: string[] = []
+  for (let index = 0; index < parts.length; index += 1) {
+    ancestors.push(parts.slice(0, index + 1).join('/'))
+  }
+
+  return ancestors
+}
+
+const collectFolderPaths = (nodes: FsNode[]) => {
+  const folderPaths = new Set<string>([''])
+
+  const visit = (items: FsNode[]) => {
+    for (const item of items) {
+      if (item.type !== 'folder') {
+        continue
+      }
+
+      folderPaths.add(normalizePath(item.path))
+      visit(item.children ?? [])
+    }
+  }
+
+  visit(nodes)
+  return folderPaths
+}
+
+const collectNoteTreeNodes = (
+  nodes: FsNode[],
+  visibleNoteIds: Set<string>,
+  noteByInnerPath: Map<string, NoteRecord>,
+  keepEmptyFolders: boolean
+): FsNode[] =>
+  nodes
+    .map((node) => {
+      if (node.type === 'folder') {
+        const children: FsNode[] = collectNoteTreeNodes(
+          node.children ?? [],
+          visibleNoteIds,
+          noteByInnerPath,
+          keepEmptyFolders
+        )
+        if (children.length === 0 && !keepEmptyFolders) {
+          return null
+        }
+
+        return {
+          ...node,
+          children
+        }
+      }
+
+      const note = noteByInnerPath.get(normalizePath(node.path))
+      if (!note || !visibleNoteIds.has(note.id)) {
+        return null
+      }
+
+      return node
+    })
+    .filter((node): node is FsNode => node !== null)
+
 export function Workspace() {
-  const [notes, setNotes] = useState<Note[]>([])
-  const [folders, setFolders] = useState<FolderItem[]>([])
+  const [notes, setNotes] = useState<NoteRecord[]>([])
+  const [folders, setFolders] = useState<FolderRecord[]>([])
+  const [notesTree, setNotesTree] = useState<FsNode[]>([])
   const [attachments, setAttachments] = useState<AttachmentItem[]>([])
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
+  const [selectedFolderRelativePath, setSelectedFolderRelativePath] = useState('')
   const [editedContent, setEditedContent] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [activeRightTab, setActiveRightTab] = useState<'Outline' | 'Graph'>('Outline')
   const [showLeftPanel, setShowLeftPanel] = useState(true)
   const [showRightPanel, setShowRightPanel] = useState(true)
   const [showGraphModal, setShowGraphModal] = useState(false)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [showCanvas, setShowCanvas] = useState(false)
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null)
+  const [dropTargetFolderPath, setDropTargetFolderPath] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
 
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveTimerRef = useRef<number | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
   const lastOpenedNoteIdRef = useRef<string | null>(null)
+  const selectedNotePathRef = useRef<string | null>(null)
+  const selectedFolderPathRef = useRef('')
+  const folderExpansionRef = useRef<Map<string, boolean>>(new Map())
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+
+  useEffect(() => {
+    const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null
+    selectedNotePathRef.current = selectedNote?.fullPath ?? null
+  }, [notes, selectedNoteId])
 
   const selectedNote = useMemo(
     () => notes.find((note) => note.id === selectedNoteId) ?? null,
     [notes, selectedNoteId]
   )
 
+  useEffect(() => {
+    if (selectedNote?.linkable && selectedNote.fullPath) {
+      syncWorkspaceState(ACTIVE_NOTE_PATH_KEY, normalizeAbsolutePath(selectedNote.fullPath))
+      return
+    }
+
+    syncWorkspaceState(ACTIVE_NOTE_PATH_KEY, null)
+  }, [selectedNote?.fullPath, selectedNote?.linkable])
+
+  useEffect(() => {
+    if (!selectedNote?.linkable) {
+      syncWorkspaceState(ACTIVE_NOTE_EDITING_KEY, 'false')
+      syncWorkspaceState(ACTIVE_NOTE_CONTENT_KEY, null)
+      return
+    }
+
+    syncWorkspaceState(ACTIVE_NOTE_EDITING_KEY, editedContent !== selectedNote.content ? 'true' : 'false')
+    syncWorkspaceState(ACTIVE_NOTE_CONTENT_KEY, editedContent)
+  }, [editedContent, selectedNote])
+
+  useEffect(() => {
+    selectedFolderPathRef.current = selectedFolderRelativePath
+  }, [selectedFolderRelativePath])
+
+  useEffect(() => {
+    folderExpansionRef.current = new Map(folders.map((folder) => [folder.name, folder.expanded]))
+  }, [folders])
+
   const linkableNotes = useMemo(() => notes.filter((note) => note.linkable), [notes])
   const linkableNoteTitles = useMemo(() => linkableNotes.map((note) => note.title), [linkableNotes])
 
-  const loadVault = useCallback(async () => {
-    const vaultPath = localStorage.getItem('netherite-current-vault-path')
-    if (!vaultPath) return
+  const loadVault = useCallback(
+    async (preferredNotePath?: string | null, preferredFolderRelativePath?: string | null) => {
+      const vaultPath = getCurrentVaultPath()
+      if (!vaultPath) {
+        setNotes([])
+        setFolders([])
+        setNotesTree([])
+        setAttachments([])
+        setSelectedNoteId(null)
+        setSelectedFolderRelativePath('')
+        setEditedContent('')
+        return
+      }
 
-    const fsNodes = await window.electronAPI.readFolder(vaultPath, { includeMarkdownContent: true })
-    const loadedNotes: Note[] = []
-    const folderMap = new Map<string, string[]>()
-    const loadedAttachments: AttachmentItem[] = []
+      const [vaultNodes, noteNodes] = await Promise.all([
+        window.electronAPI.readFolder(vaultPath, { includeMarkdownContent: true }),
+        window.electronAPI.readFolder(getNotesRootPath(vaultPath), { includeMarkdownContent: false })
+      ])
 
-    const pushFolderNote = (folderName: string, noteId: string) => {
-      const existing = folderMap.get(folderName) ?? []
-      existing.push(noteId)
-      folderMap.set(folderName, existing)
-    }
+      const loadedNotes: NoteRecord[] = []
+      const folderMap = new Map<string, string[]>()
+      const loadedAttachments: AttachmentItem[] = []
 
-    const visit = (nodes: Window['electronAPI'] extends { readFolder: (...args: any[]) => Promise<infer T> } ? T : never) => {
-      for (const node of nodes as any[]) {
-        const relativePath = normalizePath(node.path)
-        if (node.type === 'folder') {
-          if (node.children) visit(node.children)
-          continue
-        }
+      const pushFolderNote = (folderName: string, noteId: string) => {
+        const existing = folderMap.get(folderName) ?? []
+        existing.push(noteId)
+        folderMap.set(folderName, existing)
+      }
 
-        const lowerPath = relativePath.toLowerCase()
-        if (lowerPath.endsWith('.md')) {
-          const noteId = crypto.randomUUID()
-          const insideNotes = lowerPath.startsWith('notes/')
-          const insideReserved = Array.from(RESERVED_FOLDERS).some(
-            (folder) => lowerPath.startsWith(`${folder}/`) || lowerPath === folder
-          )
-
-          if (insideNotes) {
-            const innerPath = relativePath.slice('notes/'.length)
-            const pathParts = innerPath.split('/').filter(Boolean)
-            const folderName = pathParts.length > 1 ? pathParts[0] : 'notes'
-            loadedNotes.push({
-              id: noteId,
-              title: node.name.replace(/\.md$/i, ''),
-              content: node.content || '',
-              folder: folderName,
-              path: relativePath,
-              fullPath: `${vaultPath}/${relativePath}`,
-              linkable: true,
-              updatedAt: 'Loaded',
-              openedAt: 'Loaded'
-            })
-            pushFolderNote(folderName, noteId)
+      const visit = (nodes: FsNode[]) => {
+        for (const node of nodes) {
+          const relativePath = normalizePath(node.path)
+          if (node.type === 'folder') {
+            visit(node.children ?? [])
             continue
           }
 
-          if (!insideReserved) {
-            loadedNotes.push({
-              id: noteId,
-              title: node.name.replace(/\.md$/i, ''),
-              content: node.content || '',
-              folder: OUTSIDE_JUNK,
-              path: relativePath,
-              fullPath: `${vaultPath}/${relativePath}`,
-              linkable: false,
-              updatedAt: 'Loaded',
-              openedAt: 'Loaded'
-            })
-            pushFolderNote(OUTSIDE_JUNK, noteId)
+          const lowerPath = relativePath.toLowerCase()
+          if (lowerPath.endsWith('.md')) {
+            const fullPath = joinPath(vaultPath, relativePath)
+            const noteId = fullPath
+            const insideNotes = lowerPath.startsWith('notes/')
+            const insideReserved = Array.from(RESERVED_FOLDERS).some(
+              (folder) => lowerPath.startsWith(`${folder}/`) || lowerPath === folder
+            )
+
+            if (insideNotes) {
+              const innerPath = getNotesInnerPath(relativePath)
+              const pathParts = innerPath.split('/').filter(Boolean)
+              const folderName = pathParts.length > 1 ? pathParts[0] : 'notes'
+
+              loadedNotes.push({
+                id: noteId,
+                title: node.name.replace(/\.md$/i, ''),
+                content: node.content || '',
+                folder: folderName,
+                path: relativePath,
+                fullPath,
+                linkable: true,
+                updatedAt: 'Loaded',
+                openedAt: 'Loaded'
+              })
+              pushFolderNote(folderName, noteId)
+              continue
+            }
+
+            if (!insideReserved) {
+              loadedNotes.push({
+                id: noteId,
+                title: node.name.replace(/\.md$/i, ''),
+                content: node.content || '',
+                folder: OUTSIDE_JUNK,
+                path: relativePath,
+                fullPath,
+                linkable: false,
+                updatedAt: 'Loaded',
+                openedAt: 'Loaded'
+              })
+              pushFolderNote(OUTSIDE_JUNK, noteId)
+            }
+            continue
           }
 
-          continue
-        }
-
-        if (lowerPath.startsWith('attachments/')) {
-          loadedAttachments.push({
-            name: node.name,
-            fullPath: `${vaultPath}/${relativePath}`,
-            relativePath,
-            kind: detectAttachmentKind(node.name)
-          })
+          if (lowerPath.startsWith('attachments/')) {
+            loadedAttachments.push({
+              name: node.name,
+              fullPath: joinPath(vaultPath, relativePath),
+              relativePath,
+              kind: detectAttachmentKind(node.name)
+            })
+          }
         }
       }
-    }
 
-    visit(fsNodes as any)
+      visit(vaultNodes)
 
-    const nextFolders = Array.from(folderMap.entries())
-      .map(([name, noteIds]) => ({
-        name,
-        expanded: name === 'notes' || name === OUTSIDE_JUNK,
-        noteIds
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
+      loadedNotes.sort((left, right) => left.title.localeCompare(right.title))
+      loadedAttachments.sort((left, right) => left.name.localeCompare(right.name))
 
-    loadedNotes.sort((a, b) => a.title.localeCompare(b.title))
-    loadedAttachments.sort((a, b) => a.name.localeCompare(b.name))
+      const preferredNote = preferredNotePath ? normalizeAbsolutePath(preferredNotePath) : null
+      const nextSelectedNote =
+        loadedNotes.find((note) => normalizeAbsolutePath(note.fullPath) === preferredNote) ??
+        loadedNotes.find((note) => normalizeAbsolutePath(note.fullPath) === selectedNotePathRef.current) ??
+        loadedNotes[0] ??
+        null
 
-    setNotes(loadedNotes)
-    setFolders(nextFolders)
-    setAttachments(loadedAttachments)
+      const folderPaths = collectFolderPaths(noteNodes)
+      const derivedFolderPath = nextSelectedNote?.linkable
+        ? getParentRelativePath(getNotesInnerPath(nextSelectedNote.path))
+        : ''
+      const requestedFolderPath = preferredFolderRelativePath ?? selectedFolderPathRef.current ?? derivedFolderPath
+      const expandedPaths = new Set<string>(['notes', OUTSIDE_JUNK])
+      buildAncestorFolderPaths(requestedFolderPath).forEach((path) => expandedPaths.add(path))
 
-    const nextSelectedNote = loadedNotes[0] ?? null
-    setSelectedNoteId(nextSelectedNote?.id ?? null)
-    setEditedContent(nextSelectedNote?.content ?? '')
-  }, [])
+      const nextFolders: FolderRecord[] = []
+
+      Array.from(folderPaths.values())
+        .filter((path) => path)
+        .sort((left, right) => left.localeCompare(right))
+        .forEach((path) => {
+          nextFolders.push({
+            name: path,
+            expanded: folderExpansionRef.current.get(path) ?? expandedPaths.has(path),
+            noteIds: []
+          })
+        })
+
+      const outsideJunkIds = folderMap.get(OUTSIDE_JUNK) ?? []
+      if (outsideJunkIds.length > 0) {
+        nextFolders.push({
+          name: OUTSIDE_JUNK,
+          expanded: folderExpansionRef.current.get(OUTSIDE_JUNK) ?? true,
+          noteIds: outsideJunkIds
+        })
+      }
+
+      setNotes(loadedNotes)
+      setFolders(nextFolders)
+      setNotesTree(noteNodes)
+      setAttachments(loadedAttachments)
+      setSelectedFolderRelativePath(folderPaths.has(requestedFolderPath) ? requestedFolderPath : derivedFolderPath)
+      setSelectedNoteId(nextSelectedNote?.id ?? null)
+      setEditedContent(nextSelectedNote?.content ?? '')
+    },
+    []
+  )
 
   useEffect(() => {
     void loadVault()
   }, [loadVault])
 
   useEffect(() => {
+    const syncWorkspace = () => {
+      void loadVault()
+    }
+
+    window.addEventListener('storage', syncWorkspace)
+    window.addEventListener('local-storage', syncWorkspace)
+
     return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      window.removeEventListener('storage', syncWorkspace)
+      window.removeEventListener('local-storage', syncWorkspace)
+    }
+  }, [loadVault])
+
+  useEffect(() => {
+    return () => {
+      syncWorkspaceState(ACTIVE_NOTE_PATH_KEY, null)
+      syncWorkspaceState(ACTIVE_NOTE_EDITING_KEY, 'false')
+      syncWorkspaceState(ACTIVE_NOTE_CONTENT_KEY, null)
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current)
+      }
     }
   }, [])
 
@@ -277,7 +510,9 @@ export function Workspace() {
     }
 
     return () => {
-      if (interval) clearInterval(interval)
+      if (interval) {
+        clearInterval(interval)
+      }
     }
   }, [isRecording])
 
@@ -287,7 +522,7 @@ export function Workspace() {
     }
   }, [])
 
-  const saveNote = useCallback(async (note: Note, content: string) => {
+  const saveNote = useCallback(async (note: NoteRecord, content: string) => {
     try {
       await window.electronAPI.writeFile(note.fullPath, content)
       setNotes((currentNotes) =>
@@ -295,16 +530,19 @@ export function Workspace() {
           item.id === note.id ? { ...item, content, updatedAt: 'Just now' } : item
         )
       )
-    } catch (err) {
-      toast.error('Save failed — your changes may not have been written to disk.')
-      console.error(err)
+    } catch (error) {
+      toast.error('Save failed, your changes may not have been written to disk.')
+      console.error(error)
     }
   }, [])
 
   const scheduleSave = useCallback(
-    (note: Note, content: string) => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = setTimeout(() => {
+    (note: NoteRecord, content: string) => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current)
+      }
+
+      saveTimerRef.current = window.setTimeout(() => {
         void saveNote(note, content)
       }, 500)
     },
@@ -314,111 +552,65 @@ export function Workspace() {
   const updateNoteContent = useCallback(
     (content: string) => {
       setEditedContent(content)
-      if (!selectedNote) return
+      if (!selectedNote) {
+        return
+      }
 
       scheduleSave(selectedNote, content)
     },
     [scheduleSave, selectedNote]
   )
 
-  const toggleFolder = (folderName: string) => {
+  const toggleTopLevelFolder = (folderName: string) => {
     setFolders((current) =>
-      current.map((folder) =>
-        folder.name === folderName ? { ...folder, expanded: !folder.expanded } : folder
-      )
+      current.map((folder) => (folder.name === folderName ? { ...folder, expanded: !folder.expanded } : folder))
     )
   }
 
-  const openNote = useCallback((note: Note) => {
+  const openNote = useCallback((note: NoteRecord) => {
     setSelectedNoteId(note.id)
     setEditedContent(note.content)
-
-    if (lastOpenedNoteIdRef.current === note.id) return
-    lastOpenedNoteIdRef.current = note.id
-    const openedAt = getDisplayDate()
-    setNotes((current) =>
-      current.map((item) => (item.id === note.id ? { ...item, openedAt } : item))
-    )
-  }, [])
-
-  const createNote = async () => {
-    const vaultPath = localStorage.getItem('netherite-current-vault-path')
-    if (!vaultPath) return
-
-    await window.electronAPI.createFolder(`${vaultPath}/notes`)
-    const existingTitles = new Set(notes.filter((note) => note.linkable).map((note) => note.title.toLowerCase()))
-
-    let index = 1
-    let baseTitle = 'Untitled Note'
-    let candidate = baseTitle
-    while (existingTitles.has(candidate.toLowerCase())) {
-      index += 1
-      candidate = `${baseTitle} ${index}`
+    if (note.linkable) {
+      setSelectedFolderRelativePath(getParentRelativePath(getNotesInnerPath(note.path)))
+    } else {
+      setSelectedFolderRelativePath('')
     }
 
-    const safeTitle = slugifyBaseName(candidate)
-    const relativePath = `notes/${safeTitle}.md`
-    const fullPath = `${vaultPath}/${relativePath}`
-    const content = `# ${safeTitle}\n\n`
-    try {
-      await window.electronAPI.writeFile(fullPath, content)
-    } catch (err) {
-      toast.error('Save failed — your changes may not have been written to disk.')
-      console.error(err)
+    if (lastOpenedNoteIdRef.current === note.id) {
       return
     }
 
-    const newNote: Note = {
-      id: crypto.randomUUID(),
-      title: safeTitle,
-      content,
-      folder: 'notes',
-      path: relativePath,
-      fullPath,
-      linkable: true,
-      updatedAt: 'Just now',
-      openedAt: 'Just now'
+    lastOpenedNoteIdRef.current = note.id
+    const openedAt = getDisplayDate()
+    setNotes((current) => current.map((item) => (item.id === note.id ? { ...item, openedAt } : item)))
+  }, [])
+
+  const ensureUniqueAttachmentName = useCallback(async (originalName: string) => {
+    const vaultPath = getCurrentVaultPath()
+    if (!vaultPath) {
+      return originalName
     }
 
-    setNotes((current) => [newNote, ...current])
-    setFolders((current) => {
-      const notesFolder = current.find((folder) => folder.name === 'notes')
-      if (notesFolder) {
-        return current.map((folder) =>
-          folder.name === 'notes'
-            ? { ...folder, expanded: true, noteIds: [newNote.id, ...folder.noteIds] }
-            : folder
-        )
-      }
-      return [{ name: 'notes', expanded: true, noteIds: [newNote.id] }, ...current]
-    })
-    openNote(newNote)
-  }
+    const lastDot = originalName.lastIndexOf('.')
+    const baseName = lastDot === -1 ? originalName : originalName.slice(0, lastDot)
+    const extension = lastDot === -1 ? '' : originalName.slice(lastDot)
 
-  const ensureUniqueAttachmentName = useCallback(
-    async (originalName: string) => {
-      const vaultPath = localStorage.getItem('netherite-current-vault-path')
-      if (!vaultPath) return originalName
+    let candidate = originalName
+    let counter = 1
+    while (await window.electronAPI.fileExists(joinPath(vaultPath, `attachments/${candidate}`))) {
+      candidate = `${baseName}-${counter}${extension}`
+      counter += 1
+    }
 
-      const lastDot = originalName.lastIndexOf('.')
-      const base = lastDot === -1 ? originalName : originalName.slice(0, lastDot)
-      const ext = lastDot === -1 ? '' : originalName.slice(lastDot)
-
-      let candidate = originalName
-      let counter = 1
-      while (await window.electronAPI.fileExists(`${vaultPath}/attachments/${candidate}`)) {
-        candidate = `${base}-${counter}${ext}`
-        counter += 1
-      }
-
-      return candidate
-    },
-    []
-  )
+    return candidate
+  }, [])
 
   const registerAttachment = useCallback((name: string, fullPath: string, kind?: AttachmentItem['kind']) => {
     setAttachments((current) => {
-      if (current.some((item) => item.fullPath === fullPath)) return current
+      if (current.some((item) => item.fullPath === fullPath)) {
+        return current
+      }
+
       return [
         ...current,
         {
@@ -427,14 +619,16 @@ export function Workspace() {
           relativePath: `attachments/${name}`,
           kind: resolveAttachmentKind(name, kind)
         }
-      ].sort((a, b) => a.name.localeCompare(b.name))
+      ].sort((left, right) => left.name.localeCompare(right.name))
     })
   }, [])
 
   const importAttachmentFile = useCallback(
-    async (file: File, source: 'paste' | 'drop' | 'picker' = 'paste') => {
-      const vaultPath = localStorage.getItem('netherite-current-vault-path')
-      if (!vaultPath) return null
+    async (file: File, source: 'paste' | 'drop' = 'paste') => {
+      const vaultPath = getCurrentVaultPath()
+      if (!vaultPath) {
+        return null
+      }
 
       await window.electronAPI.createFolder(`${vaultPath}/attachments`)
       const attachmentKind = detectAttachmentKindFromMime(file.type)
@@ -442,6 +636,7 @@ export function Workspace() {
       const finalName = await ensureUniqueAttachmentName(generatedName)
       const fullPath = `${vaultPath}/attachments/${finalName}`
       const buffer = await file.arrayBuffer()
+
       await window.electronAPI.writeBinaryFile(fullPath, buffer)
       registerAttachment(finalName, fullPath, attachmentKind)
       return finalName
@@ -449,21 +644,26 @@ export function Workspace() {
     [ensureUniqueAttachmentName, registerAttachment]
   )
 
-  const pickAttachmentFromDisk = async () => {
-    const vaultPath = localStorage.getItem('netherite-current-vault-path')
-    if (!vaultPath) return
+  const pickAttachmentFromDisk = useCallback(async () => {
+    const vaultPath = getCurrentVaultPath()
+    if (!vaultPath) {
+      return
+    }
 
     await window.electronAPI.createFolder(`${vaultPath}/attachments`)
     const filePath = await window.electronAPI.selectFile([{ name: 'All Files', extensions: ['*'] }])
-    if (!filePath) return
+    if (!filePath) {
+      return
+    }
 
     const originalName = normalizePath(filePath).split('/').pop() || `file-${Date.now()}`
     const finalName = await ensureUniqueAttachmentName(originalName)
     const destination = `${vaultPath}/attachments/${finalName}`
+
     await window.electronAPI.copyFile(filePath, destination)
     registerAttachment(finalName, destination)
     editorRef.current?.insertWikilink(finalName, true)
-  }
+  }, [ensureUniqueAttachmentName, registerAttachment])
 
   const toggleAudioRecording = useCallback(async () => {
     if (isRecording && mediaRecorderRef.current) {
@@ -479,12 +679,16 @@ export function Workspace() {
       audioChunksRef.current = []
 
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data)
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
       }
 
       recorder.onstop = async () => {
-        const vaultPath = localStorage.getItem('netherite-current-vault-path')
-        if (!vaultPath) return
+        const vaultPath = getCurrentVaultPath()
+        if (!vaultPath) {
+          return
+        }
 
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
         const extension = recorder.mimeType.includes('ogg') ? '.ogg' : '.webm'
@@ -509,8 +713,10 @@ export function Workspace() {
 
   const insertCanvasPages = useCallback(
     async (pages: string[]) => {
-      const vaultPath = localStorage.getItem('netherite-current-vault-path')
-      if (!vaultPath || pages.length === 0) return
+      const vaultPath = getCurrentVaultPath()
+      if (!vaultPath || pages.length === 0) {
+        return
+      }
 
       await window.electronAPI.createFolder(`${vaultPath}/attachments`)
       const fileNames: string[] = []
@@ -542,14 +748,116 @@ export function Workspace() {
   const openNoteByTitle = useCallback(
     (title: string) => {
       const note = notes.find((item) => item.linkable && item.title.toLowerCase() === title.toLowerCase())
-      if (note) openNote(note)
+      if (note) {
+        openNote(note)
+      }
     },
     [notes, openNote]
   )
 
+  const createNote = useCallback(async () => {
+    const vaultPath = getCurrentVaultPath()
+    if (!vaultPath) {
+      return
+    }
+
+    await window.electronAPI.createFolder(`${vaultPath}/notes`)
+
+    const existingTitles = new Set(
+      notes.filter((note) => note.linkable).map((note) => note.title.toLowerCase())
+    )
+
+    let index = 1
+    const baseTitle = 'Untitled Note'
+    let candidate = baseTitle
+    while (existingTitles.has(candidate.toLowerCase())) {
+      index += 1
+      candidate = `${baseTitle} ${index}`
+    }
+
+    const safeTitle = slugifyBaseName(candidate)
+    const folderPath = selectedFolderPathRef.current
+    const innerRelativePath = folderPath ? `${folderPath}/${safeTitle}.md` : `${safeTitle}.md`
+    const fullPath = `${vaultPath}/notes/${innerRelativePath}`
+    const content = `# ${safeTitle}\n\n`
+
+    try {
+      await window.electronAPI.writeFile(fullPath, content)
+      await loadVault(fullPath, folderPath)
+    } catch (error) {
+      toast.error('Save failed, your changes may not have been written to disk.')
+      console.error(error)
+    }
+  }, [loadVault, notes])
+
+  const createFolder = useCallback(async (folderNameValue: string) => {
+    const vaultPath = getCurrentVaultPath()
+    if (!vaultPath) {
+      return
+    }
+
+    if (!folderNameValue.trim()) {
+      return
+    }
+
+    const folderName = slugifyBaseName(folderNameValue)
+    const baseFolder = selectedFolderPathRef.current
+    const folderRelativePath = baseFolder ? `${baseFolder}/${folderName}` : folderName
+
+    try {
+      await window.electronAPI.createNoteFolder(vaultPath, folderRelativePath)
+      await loadVault(undefined, folderRelativePath)
+      setShowCreateFolderModal(false)
+      setNewFolderName('')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not create this folder.')
+      console.error(error)
+    }
+  }, [loadVault])
+
+  const moveNoteToFolder = useCallback(
+    async (note: NoteRecord, targetFolderPath: string) => {
+      const vaultPath = getCurrentVaultPath()
+      if (!vaultPath || !note.linkable) {
+        return
+      }
+
+      const currentInnerPath = normalizePath(getNotesInnerPath(note.path))
+      const currentFolderPath = getParentRelativePath(currentInnerPath)
+      const noteFileName = currentInnerPath.split('/').pop()
+
+      if (!noteFileName || currentFolderPath === targetFolderPath) {
+        return
+      }
+
+      const nextRelativePath = targetFolderPath ? `${targetFolderPath}/${noteFileName}` : noteFileName
+      const nextFullPath = joinPath(vaultPath, `notes/${nextRelativePath}`)
+
+      try {
+        if (await window.electronAPI.fileExists(nextFullPath)) {
+          toast.error('A note with that name already exists in this folder.')
+          return
+        }
+
+        await window.electronAPI.renameNoteItem(currentInnerPath, nextRelativePath)
+        await loadVault(nextFullPath, targetFolderPath)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not move this note.')
+        console.error(error)
+      } finally {
+        setDraggedNoteId(null)
+        setDropTargetFolderPath(null)
+      }
+    },
+    [loadVault]
+  )
+
   const filteredNotes = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
-    if (!query) return notes
+    if (!query) {
+      return notes
+    }
+
     return notes.filter(
       (note) =>
         note.title.toLowerCase().includes(query) || note.content.toLowerCase().includes(query)
@@ -560,15 +868,40 @@ export function Workspace() {
   const headings = useMemo(() => parseHeadings(editedContent), [editedContent])
   const graph = useMemo(() => buildGraph(notes), [notes])
 
-  const visibleFolders = useMemo(
+  const expandedFolderMap = useMemo(
+    () => new Map(folders.map((folder) => [folder.name, folder.expanded])),
+    [folders]
+  )
+
+  const linkableNoteByInnerPath = useMemo(
     () =>
-      folders
-        .map((folder) => ({
-          ...folder,
-          noteIds: folder.noteIds.filter((noteId) => filteredNoteIds.has(noteId))
-        }))
-        .filter((folder) => folder.noteIds.length > 0 || !searchQuery.trim()),
-    [filteredNoteIds, folders, searchQuery]
+      new Map(
+        notes
+          .filter((note) => note.linkable)
+          .map((note) => [normalizePath(getNotesInnerPath(note.path)), note] as const)
+      ),
+    [notes]
+  )
+
+  const visibleTreeNodes = useMemo(
+    () =>
+      collectNoteTreeNodes(
+        notesTree,
+        filteredNoteIds,
+        linkableNoteByInnerPath,
+        searchQuery.trim().length === 0
+      ),
+    [filteredNoteIds, linkableNoteByInnerPath, notesTree, searchQuery]
+  )
+
+  const outsideJunkFolder = useMemo(() => folders.find((folder) => folder.name === OUTSIDE_JUNK) ?? null, [folders])
+  const visibleOutsideJunkNotes = useMemo(
+    () =>
+      (outsideJunkFolder?.noteIds ?? [])
+        .map((noteId) => filteredNotes.find((note) => note.id === noteId))
+        .filter((note): note is NoteRecord => Boolean(note))
+        .sort((left, right) => left.title.localeCompare(right.title)),
+    [filteredNotes, outsideJunkFolder]
   )
 
   const contextActions = [
@@ -599,59 +932,215 @@ export function Workspace() {
     { label: 'Sketch Canvas', action: () => setShowCanvas(true) }
   ]
 
+  const renderTreeNodes = useCallback(
+    (nodes: FsNode[], depth = 1): JSX.Element[] =>
+      nodes.flatMap((node) => {
+        if (node.type === 'folder') {
+          const folderKey = normalizePath(node.path)
+          const folderOpen = expandedFolderMap.get(folderKey) ?? false
+          const isSelectedFolder = selectedFolderRelativePath === folderKey
+          const isDropTarget = draggedNoteId !== null && dropTargetFolderPath === folderKey
+
+          return [
+            <div
+              key={`folder-${folderKey}`}
+              className="mb-1"
+              onDragOver={(event) => {
+                if (!draggedNoteId) {
+                  return
+                }
+
+                event.stopPropagation()
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                setDropTargetFolderPath(folderKey)
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  return
+                }
+
+                setDropTargetFolderPath((current) => (current === folderKey ? null : current))
+              }}
+              onDrop={(event) => {
+                event.stopPropagation()
+                event.preventDefault()
+                const draggedNote = notes.find((item) => item.id === draggedNoteId && item.linkable)
+                if (!draggedNote) {
+                  setDraggedNoteId(null)
+                  setDropTargetFolderPath(null)
+                  return
+                }
+
+                void moveNoteToFolder(draggedNote, folderKey)
+              }}
+            >
+              <button
+                onClick={() => {
+                  toggleTopLevelFolder(folderKey)
+                  setSelectedFolderRelativePath(folderKey)
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium transition-colors ${
+                  isDropTarget
+                    ? 'bg-[rgba(255,183,125,0.14)] text-[#ffd4b1]'
+                    : isSelectedFolder
+                    ? 'bg-[#111111] text-[#ffcfaa]'
+                    : 'text-[#ffb77d] hover:bg-[#111111] hover:text-[#ffd4b1]'
+                }`}
+                style={{ paddingLeft: `${depth * 14}px` }}
+              >
+                {folderOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                <Folder className="h-4 w-4" />
+                <span>{formatFolderLabel(node.name)}</span>
+              </button>
+              {folderOpen && node.children ? (
+                <div className="mt-1">{renderTreeNodes(node.children, depth + 1)}</div>
+              ) : null}
+            </div>
+          ]
+        }
+
+        const note = linkableNoteByInnerPath.get(normalizePath(node.path))
+        if (!note) {
+          return []
+        }
+
+        const isActive = note.id === selectedNoteId
+        const isDragging = note.id === draggedNoteId
+        return [
+          <button
+            key={note.id}
+            onClick={() => openNote(note)}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', note.id)
+              setDraggedNoteId(note.id)
+              setDropTargetFolderPath(null)
+            }}
+            onDragEnd={() => {
+              setDraggedNoteId(null)
+              setDropTargetFolderPath(null)
+            }}
+            className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
+              isActive
+                ? 'bg-[rgba(255,86,37,0.12)] text-[#ff5625]'
+                : 'text-[#c8c2be] hover:bg-[#111111] hover:text-white'
+            } ${isDragging ? 'opacity-60' : ''}`}
+            style={{ marginLeft: `${depth * 14}px` }}
+          >
+            <FileText className="h-4 w-4 shrink-0" />
+            <span className="truncate">{note.title}</span>
+          </button>
+        ]
+      }),
+    [
+      draggedNoteId,
+      dropTargetFolderPath,
+      expandedFolderMap,
+      linkableNoteByInnerPath,
+      moveNoteToFolder,
+      notes,
+      openNote,
+      selectedFolderRelativePath,
+      selectedNoteId
+    ]
+  )
+
   return (
     <>
       <Toaster richColors theme="dark" />
+
       <div className="w-full h-full bg-[#0a0808]">
         <PanelGroup direction="horizontal">
-        {showLeftPanel && (
-          <>
-            <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-r border-[#2a2422] bg-[#0a0808]">
-              <div className="p-4">
-                <button
-                  onClick={createNote}
-                  className="mb-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[0.72rem] font-bold uppercase tracking-[0.18em] text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
-                >
-                  <Plus className="h-4 w-4" />
-                  <span>New Note</span>
-                </button>
+          {showLeftPanel && (
+            <>
+              <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-r border-[#2a2422] bg-[#0a0808]">
+                <div className="p-4">
+                  <div className="mb-4 flex gap-2">
+                    <button
+                      onClick={() => void createNote()}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[0.72rem] font-bold uppercase tracking-[0.18em] text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>New Note</span>
+                    </button>
+                    <button
+                      onClick={() => setShowCreateFolderModal(true)}
+                      className="flex items-center justify-center rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
+                      title="New Folder"
+                    >
+                      <FolderPlus className="h-4 w-4" />
+                    </button>
+                  </div>
 
-                <div className="flex items-center gap-2 rounded-xl border border-[#2a2422] bg-[#111111] px-3 py-2">
-                  <Search className="h-4 w-4 text-[#666666]" />
-                  <input
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Search notes..."
-                    className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[#555555]"
-                  />
+                  <div className="flex items-center gap-2 rounded-xl border border-[#2a2422] bg-[#111111] px-3 py-2">
+                    <Search className="h-4 w-4 text-[#666666]" />
+                    <input
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder="Search notes..."
+                      className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[#555555]"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex-1 overflow-y-auto px-3 py-4">
-                {visibleFolders.map((folder) => {
-                  const folderNotes = folder.noteIds
-                    .map((noteId) => filteredNotes.find((note) => note.id === noteId))
-                    .filter((note): note is Note => Boolean(note))
-                    .sort((a, b) => a.title.localeCompare(b.title))
+                <div className="flex-1 overflow-y-auto px-3 py-4">
+                  <div
+                    className={`mb-3 space-y-1 rounded-xl transition-colors ${
+                      draggedNoteId !== null && dropTargetFolderPath === ''
+                        ? 'bg-[rgba(255,183,125,0.08)]'
+                        : ''
+                    }`}
+                    onDragOver={(event) => {
+                      if (!draggedNoteId) {
+                        return
+                      }
 
-                  return (
-                    <div key={folder.name} className="mb-3">
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                      setDropTargetFolderPath('')
+                    }}
+                    onDragLeave={(event) => {
+                      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                        return
+                      }
+
+                      setDropTargetFolderPath((current) => (current === '' ? null : current))
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      const draggedNote = notes.find((item) => item.id === draggedNoteId && item.linkable)
+                      if (!draggedNote) {
+                        setDraggedNoteId(null)
+                        setDropTargetFolderPath(null)
+                        return
+                      }
+
+                      void moveNoteToFolder(draggedNote, '')
+                    }}
+                  >
+                    {renderTreeNodes(visibleTreeNodes, 0)}
+                  </div>
+
+                  {outsideJunkFolder && (visibleOutsideJunkNotes.length > 0 || !searchQuery.trim()) && (
+                    <div className="mb-3">
                       <button
-                        onClick={() => toggleFolder(folder.name)}
-                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-bold uppercase tracking-[0.18em] text-[#a8a0a0] transition-colors hover:bg-[#111111] hover:text-white"
+                        onClick={() => toggleTopLevelFolder(OUTSIDE_JUNK)}
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-[#ffb77d] transition-colors hover:bg-[#111111] hover:text-[#ffd4b1]"
                       >
-                        {folder.expanded ? (
+                        {outsideJunkFolder.expanded ? (
                           <ChevronDown className="h-4 w-4" />
                         ) : (
                           <ChevronRight className="h-4 w-4" />
                         )}
                         <Folder className="h-4 w-4" />
-                        <span>{folder.name}</span>
+                        <span>{formatFolderLabel(outsideJunkFolder.name)}</span>
                       </button>
 
-                      {folder.expanded && (
+                      {outsideJunkFolder.expanded && (
                         <div className="mt-1 space-y-1">
-                          {folderNotes.map((note) => {
+                          {visibleOutsideJunkNotes.map((note) => {
                             const isActive = note.id === selectedNoteId
                             return (
                               <button
@@ -671,185 +1160,186 @@ export function Workspace() {
                         </div>
                       )}
                     </div>
-                  )
-                })}
-              </div>
-
-              <div className="border-t border-[#1f1d1d] p-2">
-                <button
-                  onClick={() => setShowLeftPanel(false)}
-                  className="rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
-                  title="Close sidebar"
-                >
-                  <PanelLeftClose className="h-4 w-4" />
-                </button>
-              </div>
-            </Panel>
-            <PanelResizeHandle className="w-px bg-[#1f1d1d] transition-colors hover:bg-[#ff5625]" />
-          </>
-        )}
-
-        <Panel className="relative flex flex-col bg-[#0a0808]">
-          {!showLeftPanel && (
-            <button
-              onClick={() => setShowLeftPanel(true)}
-              className="absolute bottom-4 left-4 z-20 rounded-xl border border-[#1f1d1d] bg-[#0a0808] p-2 text-[#666666] shadow-lg transition-colors hover:text-white"
-            >
-              <PanelLeftOpen className="h-5 w-5" />
-            </button>
-          )}
-
-          {!showRightPanel && (
-            <button
-              onClick={() => setShowRightPanel(true)}
-              className="absolute bottom-4 right-4 z-20 rounded-xl border border-[#1f1d1d] bg-[#0a0808] p-2 text-[#666666] shadow-lg transition-colors hover:text-white"
-            >
-              <PanelRightOpen className="h-5 w-5" />
-            </button>
-          )}
-
-          {selectedNote ? (
-            <>
-              <header className="px-6 py-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h1 className="text-xl font-bold text-[#ffb77d]">{selectedNote.title}</h1>
-                  </div>
-
-                  <div className="text-right text-[0.62rem] font-bold uppercase tracking-[0.18em] text-[#777777]">
-                    <div>
-                      {editedContent.length} chars · {editedContent.split(/\s+/).filter(Boolean).length} words · Recently opened
-                    </div>
-                    {isRecording && (
-                      <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#ff5449]/25 bg-[#ff5449]/10 px-3 py-1 text-[0.58rem] text-[#ff8a80]">
-                        <Square className="h-3.5 w-3.5 fill-current" />
-                        Recording {recordingTime}s
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
-              </header>
 
-              <div
-                className="relative flex-1 overflow-hidden"
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  const menuWidth = 240
-                  const menuHeight = 44 + contextActions.length * 42
-                  const padding = 12
-                  setContextMenu({
-                    x: Math.max(padding, Math.min(event.clientX, window.innerWidth - menuWidth - padding)),
-                    y: Math.max(padding, Math.min(event.clientY, window.innerHeight - menuHeight - padding))
-                  })
-                  editorRef.current?.focus()
-                }}
-              >
-                <div className="h-full min-w-0 overflow-hidden">
-                  <ObsidianMarkdownEditor
-                    ref={editorRef}
-                    noteId={selectedNote.id}
-                    value={editedContent}
-                    noteTitles={linkableNoteTitles}
-                    attachmentItems={attachments}
-                    onChange={updateNoteContent}
-                    onOpenNote={openNoteByTitle}
-                    onImportAttachment={importAttachmentFile}
-                  />
+                <div className="border-t border-[#1f1d1d] p-2">
+                  <button
+                    onClick={() => setShowLeftPanel(false)}
+                    className="rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                    title="Close sidebar"
+                  >
+                    <PanelLeftClose className="h-4 w-4" />
+                  </button>
                 </div>
-              </div>
+              </Panel>
+
+              <PanelResizeHandle className="w-px bg-[#1f1d1d] transition-colors hover:bg-[#ff5625]" />
             </>
-          ) : (
-            <div className="flex flex-1 items-center justify-center text-[#666666]">
-              <div className="text-center">
-                <FileText className="mx-auto mb-4 h-12 w-12 text-[#ff7043]/60" />
-                <p>Select a note or create a new one.</p>
-              </div>
-            </div>
           )}
-        </Panel>
 
-        {showRightPanel && (
-          <>
-            <PanelResizeHandle className="w-px bg-[#1f1d1d] transition-colors hover:bg-[#ff5625]" />
-            <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-l border-[#2a2422] bg-[#0a0808]">
-              <div className="flex gap-2 p-4">
-                <button
-                  onClick={() => setActiveRightTab('Outline')}
-                  className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
-                    activeRightTab === 'Outline'
-                      ? 'bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
-                      : 'text-[#666666] hover:bg-[#111111] hover:text-white'
-                  }`}
-                >
-                  Outline
-                </button>
-                <button
-                  onClick={() => setActiveRightTab('Graph')}
-                  className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
-                    activeRightTab === 'Graph'
-                      ? 'bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
-                      : 'text-[#666666] hover:bg-[#111111] hover:text-white'
-                  }`}
-                >
-                  Graph
-                </button>
-              </div>
+          <Panel className="relative flex flex-col bg-[#0a0808]">
+            {!showLeftPanel && (
+              <button
+                onClick={() => setShowLeftPanel(true)}
+                className="absolute bottom-4 left-4 z-20 rounded-xl border border-[#1f1d1d] bg-[#0a0808] p-2 text-[#666666] shadow-lg transition-colors hover:text-white"
+              >
+                <PanelLeftOpen className="h-5 w-5" />
+              </button>
+            )}
 
-              <div className="flex-1 overflow-y-auto p-4">
-                {activeRightTab === 'Outline' ? (
-                  <div className="space-y-2">
-                    <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[#ffb77d]">
-                      In this note
-                    </h3>
-                    {headings.length > 0 ? (
-                      headings.map((heading, index) => (
-                        <div
-                          key={`${heading.lineIndex}-${index}`}
-                          className="truncate text-sm text-[#c8c2be]"
-                          style={{ paddingLeft: `${(heading.level - 1) * 12}px` }}
-                        >
-                          {heading.text}
+            {!showRightPanel && (
+              <button
+                onClick={() => setShowRightPanel(true)}
+                className="absolute bottom-4 right-4 z-20 rounded-xl border border-[#1f1d1d] bg-[#0a0808] p-2 text-[#666666] shadow-lg transition-colors hover:text-white"
+              >
+                <PanelRightOpen className="h-5 w-5" />
+              </button>
+            )}
+
+            {selectedNote ? (
+              <>
+                <header className="px-6 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h1 className="text-xl font-bold text-[#ffb77d]">{selectedNote.title}</h1>
+                    </div>
+
+                    <div className="text-right text-[0.62rem] font-bold uppercase tracking-[0.18em] text-[#777777]">
+                      <div>
+                        {editedContent.length} chars · {editedContent.split(/\s+/).filter(Boolean).length} words · Recently opened
+                      </div>
+                      {isRecording && (
+                        <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#ff5449]/25 bg-[#ff5449]/10 px-3 py-1 text-[0.58rem] text-[#ff8a80]">
+                          <Square className="h-3.5 w-3.5 fill-current" />
+                          Recording {recordingTime}s
                         </div>
-                      ))
-                    ) : (
-                      <p className="text-xs text-[#555555]">No headings found.</p>
-                    )}
+                      )}
+                    </div>
                   </div>
-                ) : graph.nodes.length > 0 ? (
-                  <div className="relative h-full min-h-[300px]">
-                    <GraphView
-                      nodes={graph.nodes}
-                      edges={graph.edges}
-                      onNodeClick={(id) => {
-                        const note = notes.find((item) => item.id === id)
-                        if (note) openNote(note)
-                      }}
-                    />
-                    <button
-                      onClick={() => setShowGraphModal(true)}
-                      className="absolute right-2 top-2 rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
-                    >
-                      <Maximize2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-[#666666]">
-                    Add linkable notes in `notes/` to build the graph.
-                  </div>
-                )}
-              </div>
+                </header>
 
-              <div className="border-t border-[#1f1d1d] p-2">
-                <button
-                  onClick={() => setShowRightPanel(false)}
-                  className="rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                <div
+                  className="relative flex-1 overflow-hidden"
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    const menuWidth = 240
+                    const menuHeight = 44 + contextActions.length * 42
+                    const padding = 12
+                    setContextMenu({
+                      x: Math.max(padding, Math.min(event.clientX, window.innerWidth - menuWidth - padding)),
+                      y: Math.max(padding, Math.min(event.clientY, window.innerHeight - menuHeight - padding))
+                    })
+                    editorRef.current?.focus()
+                  }}
                 >
-                  <PanelRightClose className="h-4 w-4" />
-                </button>
+                  <div className="h-full min-w-0 overflow-hidden">
+                    <ObsidianMarkdownEditor
+                      ref={editorRef}
+                      noteId={selectedNote.id}
+                      value={editedContent}
+                      noteTitles={linkableNoteTitles}
+                      attachmentItems={attachments}
+                      onChange={updateNoteContent}
+                      onOpenNote={openNoteByTitle}
+                      onImportAttachment={importAttachmentFile}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-[#666666]">
+                <div className="text-center">
+                  <FileText className="mx-auto mb-4 h-12 w-12 text-[#ff7043]/60" />
+                  <p>Select a note or create a new one.</p>
+                </div>
               </div>
-            </Panel>
-          </>
-        )}
+            )}
+          </Panel>
+
+          {showRightPanel && (
+            <>
+              <PanelResizeHandle className="w-px bg-[#1f1d1d] transition-colors hover:bg-[#ff5625]" />
+
+              <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-l border-[#2a2422] bg-[#0a0808]">
+                <div className="flex gap-2 p-4">
+                  <button
+                    onClick={() => setActiveRightTab('Outline')}
+                    className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
+                      activeRightTab === 'Outline'
+                        ? 'bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
+                        : 'text-[#666666] hover:bg-[#111111] hover:text-white'
+                    }`}
+                  >
+                    Outline
+                  </button>
+                  <button
+                    onClick={() => setActiveRightTab('Graph')}
+                    className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
+                      activeRightTab === 'Graph'
+                        ? 'bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
+                        : 'text-[#666666] hover:bg-[#111111] hover:text-white'
+                    }`}
+                  >
+                    Graph
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4">
+                  {activeRightTab === 'Outline' ? (
+                    <div className="space-y-2">
+                      <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[#ffb77d]">In this note</h3>
+                      {headings.length > 0 ? (
+                        headings.map((heading, index) => (
+                          <div
+                            key={`${heading.lineIndex}-${index}`}
+                            className="truncate text-sm text-[#c8c2be]"
+                            style={{ paddingLeft: `${(heading.level - 1) * 12}px` }}
+                          >
+                            {heading.text}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-[#555555]">No headings found.</p>
+                      )}
+                    </div>
+                  ) : graph.nodes.length > 0 ? (
+                    <div className="relative h-full min-h-[300px]">
+                      <GraphView
+                        nodes={graph.nodes}
+                        edges={graph.edges}
+                        onNodeClick={(id) => {
+                          const note = notes.find((item) => item.id === id)
+                          if (note) {
+                            openNote(note)
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={() => setShowGraphModal(true)}
+                        className="absolute right-2 top-2 rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                      >
+                        <Maximize2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-[#666666]">
+                      Add linkable notes in `notes/` to build the graph.
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-[#1f1d1d] p-2">
+                  <button
+                    onClick={() => setShowRightPanel(false)}
+                    className="rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                  >
+                    <PanelRightClose className="h-4 w-4" />
+                  </button>
+                </div>
+              </Panel>
+            </>
+          )}
         </PanelGroup>
 
         {showCanvas && (
@@ -878,16 +1368,78 @@ export function Workspace() {
                   X
                 </button>
               </div>
+
               <div className="flex-1">
                 <GraphView
                   nodes={graph.nodes}
                   edges={graph.edges}
                   onNodeClick={(id) => {
                     const note = notes.find((item) => item.id === id)
-                    if (note) openNote(note)
+                    if (note) {
+                      openNote(note)
+                    }
                     setShowGraphModal(false)
                   }}
                 />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showCreateFolderModal && (
+          <div
+            className="fixed inset-0 z-[220] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={() => {
+              setShowCreateFolderModal(false)
+              setNewFolderName('')
+            }}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-[#2a2422] bg-[#0a0808] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="border-b border-[#2a2422] px-6 py-4">
+                <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#ffb77d]">New Folder</h2>
+              </div>
+
+              <div className="px-6 py-5">
+                <input
+                  autoFocus
+                  value={newFolderName}
+                  onChange={(event) => setNewFolderName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && newFolderName.trim()) {
+                      event.preventDefault()
+                      void createFolder(newFolderName)
+                    }
+
+                    if (event.key === 'Escape') {
+                      setShowCreateFolderModal(false)
+                      setNewFolderName('')
+                    }
+                  }}
+                  placeholder="Folder name"
+                  className="w-full rounded-xl border border-[#2a2422] bg-[#111111] px-4 py-3 text-sm text-white outline-none placeholder:text-[#555555]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 border-t border-[#2a2422] px-6 py-4">
+                <button
+                  onClick={() => {
+                    setShowCreateFolderModal(false)
+                    setNewFolderName('')
+                  }}
+                  className="rounded-xl border border-[#2a2422] px-4 py-2 text-sm text-[#c8c2be] transition-colors hover:bg-[#111111] hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void createFolder(newFolderName)}
+                  disabled={!newFolderName.trim()}
+                  className="rounded-xl bg-[rgba(255,183,125,0.1)] px-4 py-2 text-sm font-medium text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Create
+                </button>
               </div>
             </div>
           </div>
@@ -902,6 +1454,7 @@ export function Workspace() {
             <div className="border-b border-[#2a2422] px-4 py-2 text-[0.62rem] font-bold uppercase tracking-[0.22em] text-[#8c8079]">
               Editor Actions
             </div>
+
             <div className="py-1">
               {contextActions.map((item) => (
                 <button

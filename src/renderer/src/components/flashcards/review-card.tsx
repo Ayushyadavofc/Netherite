@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { History, Keyboard, RefreshCw } from "lucide-react"
 import { MarkdownContent } from "@/components/shared/MarkdownContent"
 import type { AttachmentItem } from "@/lib/attachments"
 
@@ -112,7 +113,7 @@ export function ReviewCard({
                 className="flex flex-col items-center gap-2 group cursor-pointer"
               >
                 <div className="w-10 h-10 rounded border border-[#2a2422] flex items-center justify-center text-[#a8a0a0] group-hover:text-[#ff5625] group-hover:border-[#ff5625] transition-all duration-200">
-                  <span className="material-symbols-outlined text-lg" data-icon="sync">sync</span>
+                  <RefreshCw className="h-[18px] w-[18px]" />
                 </div>
                 <span className="text-[0.55rem] uppercase tracking-[0.2em] font-bold text-[#a8a0a0]/30 group-hover:text-[#ff5625] transition-colors">Flip Card</span>
               </button>
@@ -146,11 +147,11 @@ export function ReviewCard({
       {/* Footer Meta */}
       <div className="mt-12 flex items-center gap-12 text-[0.6rem] uppercase tracking-[0.2em] text-[#a8a0a0]/30 font-bold">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[14px]">keyboard_command_key</span>
+          <Keyboard className="h-[14px] w-[14px]" />
           <span>Space to flip</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[14px]">history</span>
+          <History className="h-[14px] w-[14px]" />
           <span>Streak: {streak} Days</span>
         </div>
       </div>

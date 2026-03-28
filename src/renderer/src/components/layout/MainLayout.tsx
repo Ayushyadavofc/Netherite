@@ -3,7 +3,7 @@ import { TopBar } from './TopBar'
 
 export function MainLayout() {
   return (
-    <div className="flex flex-col h-full w-full bg-[#0a0808] text-white">
+    <div className="flex h-full w-full flex-col bg-[var(--nv-bg)] text-[var(--nv-foreground)]">
       <TopBar />
       <main className="flex-1 w-full flex relative overflow-hidden">
          <Outlet />

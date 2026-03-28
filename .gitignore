@@ -1,14 +1,76 @@
+# Dependencies
 node_modules/
+.pnp/
+.pnp.js
+
+# Build output
 out/
 dist/
 release/
+coverage/
+.vite/
+.turbo/
 *.tsbuildinfo
-.DS_Store
-Thumbs.db
+
+# Environment and local config
 .env
 .env.*
-.vscode/
+!.env.example
+*.local
+
+# Logs and diagnostics
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+tsc-errors.txt
+tsc-web-errors.txt
+
+# Archives, dumps, and temp artifacts
+*.zip
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.dump
+
+# Local databases and app data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+
+# Keys, certificates, and credential-like files
+*.pem
+*.key
+*.crt
+*.cer
+*.csr
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+*.secrets
+*.credentials
+
+# Electron packaging
+*.asar
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo

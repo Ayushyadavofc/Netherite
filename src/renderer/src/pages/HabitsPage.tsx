@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Flame, Check, Plus, Trash2, Edit2, X, Star } from 'lucide-react'
+import { Flame, Check, Plus, Trash2, Edit2, X, Star, Target } from 'lucide-react'
 import { useHabits, Habit, updateScraps, scrapRewardForDifficulty } from '@/hooks/use-data'
 import { getLocalToday } from '@/lib/date'
 
@@ -118,11 +118,11 @@ export default function HabitsPage() {
         </div>
         <nav className="flex flex-col gap-2">
           <button className="flex items-center gap-3 px-4 py-3 text-sm font-semibold text-[#ff5625] bg-[rgba(255,86,37,0.1)] rounded-lg text-left transition-all">
-            <span className="material-symbols-outlined text-xl">target</span>
+            <Target className="h-5 w-5" />
             <span>All Habits</span>
           </button>
           <button className="flex items-center gap-3 px-4 py-3 border border-transparent text-sm font-medium text-[#a8a0a0] hover:text-[#ffb77d] hover:bg-[#111111] transition-all rounded-lg text-left">
-            <span className="material-symbols-outlined text-xl">local_fire_department</span>
+            <Flame className="h-5 w-5" />
             <span>Mastery</span>
           </button>
         </nav>

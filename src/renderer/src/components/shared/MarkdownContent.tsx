@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState, type ComponentPropsWithoutRef } from 'react'
-import DOMPurify from 'dompurify'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import mermaid from 'mermaid'
 import { getAttachmentUrl, openAttachmentPreview, resolveAttachment, type AttachmentItem } from '@/lib/attachments'
+import {
+  buildCodePreviewDocument,
+  buildMermaidPreviewDocument,
+  estimateMermaidPreviewHeight
+} from '@/lib/sandboxed-preview'
 
 let mermaidInitialized = false
 
@@ -35,11 +39,6 @@ const isSafeUrl = (url: string): boolean => {
     return false
   }
 }
-
-const sanitizeHtml = (content: string) =>
-  DOMPurify.sanitize(content, {
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|local-file|attachment|note):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
-  })
 
 function preprocessMarkdown(content: string, attachmentItems: AttachmentItem[]) {
   return content
@@ -128,7 +127,8 @@ function renderAttachment(attachment: AttachmentItem) {
 }
 
 function MermaidBlock({ source }: { source: string }) {
-  const [svg, setSvg] = useState<string | null>(null)
+  const [previewDocument, setPreviewDocument] = useState<string | null>(null)
+  const frameHeight = useMemo(() => estimateMermaidPreviewHeight(source), [source])
 
   useEffect(() => {
     let active = true
@@ -137,10 +137,14 @@ function MermaidBlock({ source }: { source: string }) {
     void mermaid
       .render(renderId, source)
       .then(({ svg: nextSvg }) => {
-        if (active) setSvg(nextSvg)
+        if (active) {
+          setPreviewDocument(buildMermaidPreviewDocument(nextSvg))
+        }
       })
       .catch(() => {
-        if (active) setSvg(null)
+        if (active) {
+          setPreviewDocument(buildCodePreviewDocument(source))
+        }
       })
 
     return () => {
@@ -148,7 +152,7 @@ function MermaidBlock({ source }: { source: string }) {
     }
   }, [source])
 
-  if (!svg) {
+  if (!previewDocument) {
     return (
       <pre className="my-4 overflow-x-auto rounded-xl border border-[#2a2422] bg-[#111111] p-4 text-sm text-[#d7d2ce]">
         <code>{source}</code>
@@ -157,9 +161,13 @@ function MermaidBlock({ source }: { source: string }) {
   }
 
   return (
-      <div
-        className="my-4 overflow-x-auto rounded-xl border border-[#2a2422] bg-[#111111] p-4"
-      dangerouslySetInnerHTML={{ __html: sanitizeHtml(svg) }}
+    <iframe
+      sandbox=""
+      referrerPolicy="no-referrer"
+      title="Mermaid preview"
+      srcDoc={previewDocument}
+      className="my-4 block w-full rounded-xl border border-[#2a2422] bg-[#111111]"
+      style={{ height: frameHeight }}
     />
   )
 }
@@ -189,15 +197,6 @@ export function MarkdownContent({
   )
 
   if (!content.trim()) return null
-
-  if (isProbablyHtmlContent(content)) {
-    return (
-      <div
-        className={className}
-        dangerouslySetInnerHTML={{ __html: sanitizeHtml(content.replace(/file:\/\//g, 'local-file://')) }}
-      />
-    )
-  }
 
   return (
     <div className={className}>

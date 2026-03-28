@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, ChevronRight, Play, Trash2, Shuffle, X } from 'lucide-react'
+import { Plus, ChevronRight, Link2, Play, Settings, Trash2, Shuffle, X } from 'lucide-react'
 import { ReviewCard } from '@/components/flashcards/review-card'
 import { StatsOverview } from '@/components/flashcards/stats-overview'
 import { RichTextarea } from '@/components/flashcards/rich-textarea'
@@ -696,7 +696,7 @@ export default function FlashcardsPage() {
             Create Deck
           </button>
           <button onClick={handleLinkExternalDeck} className="w-full flex items-center justify-center gap-2 py-3 bg-[#111111] border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors">
-            <span className="material-symbols-outlined text-sm">link</span>
+            <Link2 className="h-4 w-4" />
             Link Deck
           </button>
         </div>
@@ -782,7 +782,7 @@ export default function FlashcardsPage() {
                 Remove Card
               </button>
               <button onClick={openSettingsModal} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-white hover:text-white transition-all uppercase tracking-widest">
-                <span className="material-symbols-outlined text-[16px]">settings</span>
+                <Settings className="h-4 w-4" />
                 Settings
               </button>
             </div>

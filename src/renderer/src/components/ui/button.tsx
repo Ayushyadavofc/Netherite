@@ -9,16 +9,17 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-transparent border border-[#FF4500] text-[#FF4500] hover:bg-[#111111] hover:text-[#ff7043]',
+        default:
+          'border border-[var(--nv-primary)] bg-transparent text-[var(--nv-primary)] hover:bg-[var(--nv-surface)] hover:text-[var(--nv-secondary)]',
         destructive:
-          'border border-[#7f1d1d] text-[#f87171] bg-transparent hover:bg-[#111111]',
+          'border border-[var(--nv-danger)] text-[var(--nv-danger)] bg-transparent hover:bg-[var(--nv-danger-soft)] hover:text-white',
         outline:
-          'border border-[#1f1d1d] bg-[#111111] hover:border-[#FF4500] hover:text-white',
+          'border border-[var(--nv-border)] bg-[var(--nv-surface)] text-[var(--nv-foreground)] hover:border-[var(--nv-primary)] hover:text-white',
         secondary:
           'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost:
-          'bg-transparent border border-[#1f1d1d] text-[#666666] hover:border-[#FF4500] hover:text-white',
-        link: 'text-[#FF4500] underline-offset-4 hover:underline',
+          'border border-[var(--nv-border)] bg-transparent text-[var(--nv-muted)] hover:border-[var(--nv-primary)] hover:text-white',
+        link: 'text-[var(--nv-primary)] underline-offset-4 hover:underline',
       },
       size: {
         default: 'h-9 px-4 py-2 has-[>svg]:px-3',

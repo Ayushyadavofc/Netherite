@@ -1,6 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import DOMPurify from 'dompurify'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { EditorState, StateEffect, StateField, type Range } from '@codemirror/state'
 import { autocompletion, startCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete'
@@ -16,6 +15,11 @@ import {
   type AttachmentItem,
   type ImportedAttachmentSource
 } from '@/lib/attachments'
+import {
+  buildCodePreviewDocument,
+  buildMermaidPreviewDocument,
+  estimateMermaidPreviewHeight
+} from '@/lib/sandboxed-preview'
 
 export type { AttachmentKind, AttachmentItem } from '@/lib/attachments'
 
@@ -141,18 +145,25 @@ class MermaidWidget extends WidgetType {
   toDOM() {
     const wrapper = document.createElement('div')
     wrapper.className = 'cm-mermaid-widget'
-    const graph = document.createElement('div')
-    graph.className = 'cm-mermaid-graph'
-    wrapper.appendChild(graph)
+    const frame = document.createElement('iframe')
+    frame.className = 'cm-mermaid-graph'
+    frame.setAttribute('sandbox', '')
+    frame.setAttribute('referrerpolicy', 'no-referrer')
+    frame.setAttribute('title', 'Mermaid preview')
+    frame.style.width = '100%'
+    frame.style.height = `${estimateMermaidPreviewHeight(this.source)}px`
+    frame.style.border = '0'
+    frame.style.background = '#111111'
+    wrapper.appendChild(frame)
 
     const renderId = `mermaid-${Math.random().toString(36).slice(2)}`
     void mermaid
       .render(renderId, this.source)
       .then(({ svg }) => {
-        graph.innerHTML = DOMPurify.sanitize(svg)
+        frame.srcdoc = buildMermaidPreviewDocument(svg)
       })
       .catch(() => {
-        graph.innerHTML = DOMPurify.sanitize(`<pre>${this.source}</pre>`)
+        frame.srcdoc = buildCodePreviewDocument(this.source)
       })
 
     return wrapper

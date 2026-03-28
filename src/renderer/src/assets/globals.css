@@ -5,6 +5,21 @@
 
 /* Nether Flash */
 :root, .dark {
+  --nv-bg: #0a0808;
+  --nv-surface: #111111;
+  --nv-surface-strong: #141212;
+  --nv-border: #2a2422;
+  --nv-foreground: #ffffff;
+  --nv-muted: #a8a0a0;
+  --nv-subtle: #444444;
+  --nv-primary: #ff5625;
+  --nv-primary-soft: rgba(255, 86, 37, 0.14);
+  --nv-primary-soft-strong: rgba(255, 86, 37, 0.22);
+  --nv-primary-glow: rgba(255, 86, 37, 0.35);
+  --nv-secondary: #ffb77d;
+  --nv-secondary-soft: rgba(255, 183, 125, 0.14);
+  --nv-danger: #ff5449;
+  --nv-danger-soft: rgba(255, 84, 73, 0.16);
   --background: #0a0808;
   --foreground: #ffffff;
   --card: #141212;
@@ -85,7 +100,7 @@
   * {
     @apply border-border outline-ring/50;
   }
-  body {
+body {
     @apply bg-background text-foreground;
   }
 }
@@ -93,8 +108,8 @@
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2a2422; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #ff5625; }
+::-webkit-scrollbar-thumb { background: var(--nv-border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--nv-primary); }
 
 /* Hidden scrollbar (mouse wheel still works) */
 .no-scrollbar::-webkit-scrollbar { display: none; }

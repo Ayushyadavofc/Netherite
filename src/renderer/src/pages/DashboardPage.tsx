@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react'
 import { PixelCharacter } from '@/components/dashboard/PixelCharacter'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
 import { Flame, CheckSquare, BookOpen, Zap, ShoppingBag, Sparkles, Sword, Heart, Wand2, Brain } from 'lucide-react'
 import { useProfile, useScraps, useStreak, useTodos, useHabits } from '@/hooks/use-data'
 import { formatLocalDate, getLocalToday } from '@/lib/date'
+import { defaultVaultConfig, getCurrentVaultPath, loadVaultConfig } from '@/lib/vault-config'
 
 const nextUnlocks = [
   { name: "Shadow Gi", price: 250, rarity: "Rare", color: "#4a6fa5" },
@@ -36,6 +38,7 @@ export default function DashboardPage() {
   const [streak] = useStreak()
   const [todos] = useTodos()
   const [habits] = useHabits()
+  const [showVaultStats, setShowVaultStats] = useState(defaultVaultConfig.preferences.showVaultStats)
 
   const todayStr = getLocalToday()
 
@@ -54,6 +57,47 @@ export default function DashboardPage() {
 
   const totalFlashcardsDue = mockDecks.reduce((s, d) => s + d.dueToday, 0)
   const totalFlashcardsNew = mockDecks.reduce((s, d) => s + d.newCards, 0)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const syncVaultPreferences = async () => {
+      const vaultPath = getCurrentVaultPath()
+
+      if (!vaultPath) {
+        if (!cancelled) {
+          setShowVaultStats(defaultVaultConfig.preferences.showVaultStats)
+        }
+        return
+      }
+
+      try {
+        const config = await loadVaultConfig(vaultPath)
+        if (!cancelled) {
+          setShowVaultStats(config.preferences.showVaultStats)
+        }
+      } catch {
+        if (!cancelled) {
+          setShowVaultStats(defaultVaultConfig.preferences.showVaultStats)
+        }
+      }
+    }
+
+    void syncVaultPreferences()
+
+    const handleStorageUpdate = () => {
+      void syncVaultPreferences()
+    }
+
+    window.addEventListener('local-storage', handleStorageUpdate)
+    window.addEventListener('storage', handleStorageUpdate)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener('local-storage', handleStorageUpdate)
+      window.removeEventListener('storage', handleStorageUpdate)
+    }
+  }, [])
 
   // Calculate streaks for each section
   const todoStreak = (() => {
@@ -88,15 +132,15 @@ export default function DashboardPage() {
   })()
 
   return (
-    <div className="flex w-full h-full bg-[#0a0808]">
+    <div className="flex h-full w-full bg-[var(--nv-bg)] text-[var(--nv-foreground)]">
       
       {/* Main Content - 4 box grid */}
       <main className="flex-1 flex flex-col p-8 md:p-12 overflow-y-auto no-scrollbar">
         {/* Welcome Header */}
         <div className="mb-10">
-          <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] mb-1">Command Center</p>
-          <h1 className="text-3xl font-extrabold text-white font-headline">
-            Welcome back, <span className="text-[#ffb77d]">{profile.name || "Adventurer"}</span>
+          <p className="mb-1 text-[0.6rem] font-bold uppercase tracking-[0.3em] text-[var(--nv-subtle)]">Command Center</p>
+          <h1 className="font-headline text-3xl font-extrabold text-[var(--nv-foreground)]">
+            Welcome back, <span className="text-[var(--nv-secondary)]">{profile.name || "Adventurer"}</span>
           </h1>
         </div>
 
@@ -227,7 +271,7 @@ export default function DashboardPage() {
       </main>
 
       {/* Right Sidebar — Character + Stats */}
-      <aside className="w-80 shrink-0 h-[calc(100vh-48px)] overflow-y-auto no-scrollbar border-l border-[#2a2422] bg-[#0a0808] flex flex-col">
+      <aside className={`${showVaultStats ? 'flex' : 'hidden'} h-[calc(100vh-48px)] w-80 shrink-0 flex-col overflow-y-auto border-l border-[var(--nv-border)] bg-[var(--nv-bg)] no-scrollbar`}>
         
         {/* Character Display */}
         <div className="flex flex-col items-center p-6 relative">
