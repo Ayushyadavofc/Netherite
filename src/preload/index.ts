@@ -73,6 +73,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('createNoteFolder', vaultPath, folderRelativePath),
   renameNoteItem: (oldPath: string, newPath: string) =>
     ipcRenderer.invoke('renameNoteItem', oldPath, newPath),
+  deleteNoteItem: (targetPath: string) =>
+    ipcRenderer.invoke('deleteNoteItem', targetPath),
+  deleteVaultItem: (targetPath: string) =>
+    ipcRenderer.invoke('deleteVaultItem', targetPath),
 
   // Attachments/media: writes stay inside the active vault and imports require a user-picked source file.
   selectFile: (filters?: { name: string; extensions: string[] }[]) =>
@@ -81,6 +85,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('writeBinaryFile', filePath, data),
   copyFile: (srcPath: string, destPath: string) =>
     ipcRenderer.invoke('copyFile', srcPath, destPath),
+
+  // AI: Groq flashcard generation via main-process fetch (bypasses renderer CSP).
+  generateFlashcards: (
+    notes: { name: string; content: string }[],
+    apiKey: string
+  ) =>
+    ipcRenderer.invoke('ai:generate', { notes, apiKey }) as Promise<
+      { front: string; back: string }[]
+    >,
 
   // Window controls: renderer needs these to drive the custom chrome buttons.
   minimize: () => ipcRenderer.send('window-minimize'),

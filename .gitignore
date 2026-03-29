@@ -35,6 +35,8 @@ tsc-web-errors.txt
 *.orig
 *.rej
 *.dump
+recover.py
+ObsidianMarkdownEditor.original.tsx
 
 # Local databases and app data
 *.db

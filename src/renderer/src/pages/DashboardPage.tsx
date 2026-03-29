@@ -15,7 +15,7 @@ const nextUnlocks = [
 const rarityColors: Record<string, { text: string }> = {
   Rare: { text: "text-blue-400" },
   Epic: { text: "text-purple-400" },
-  Legendary: { text: "text-[#ff5625]" },
+  Legendary: { text: "text-[var(--nv-primary)]" },
 }
 
 // Mock flashcard data until integration
@@ -26,10 +26,10 @@ const mockDecks = [
 
 // Character stat definitions
 const characterStats = [
-  { name: 'STR', label: 'Strength', value: 12, max: 50, icon: Sword, color: '#ff5625' },
-  { name: 'HP', label: 'Health', value: 30, max: 50, icon: Heart, color: '#ff5449' },
+  { name: 'STR', label: 'Strength', value: 12, max: 50, icon: Sword, color: 'var(--nv-primary)' },
+  { name: 'HP', label: 'Health', value: 30, max: 50, icon: Heart, color: 'var(--nv-danger)' },
   { name: 'MAG', label: 'Magic', value: 8, max: 50, icon: Wand2, color: '#9b59b6' },
-  { name: 'INT', label: 'Intelligence', value: 18, max: 50, icon: Brain, color: '#ffb77d' },
+  { name: 'INT', label: 'Intelligence', value: 18, max: 50, icon: Brain, color: 'var(--nv-secondary)' },
 ]
 
 export default function DashboardPage() {
@@ -148,55 +148,55 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1 max-w-4xl">
           
           {/* To-Do */}
-          <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-6 flex flex-col hover:border-[#2a2422] transition-colors max-h-[280px]">
+          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-6 flex flex-col hover:border-[var(--nv-primary)] transition-colors max-h-[280px]">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[rgba(255,86,37,0.1)] rounded-lg flex items-center justify-center">
-                <CheckSquare className="w-4 h-4 text-[#ff5625]" />
+              <div className="w-8 h-8 bg-[var(--nv-primary-soft)] rounded-lg flex items-center justify-center">
+                <CheckSquare className="w-4 h-4 text-[var(--nv-primary)]" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-[#ff5625] uppercase tracking-wider">To-Do</h3>
+                  <h3 className="text-sm font-bold text-[var(--nv-primary)] uppercase tracking-wider">To-Do</h3>
                   {todoStreak > 0 && (
-                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[rgba(255,86,37,0.08)] rounded">
-                      <Flame className="w-3 h-3 text-[#ff5625]" />
-                      <span className="text-[0.5rem] font-bold text-[#ff5625]">{todoStreak}</span>
+                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[var(--nv-primary-soft)] rounded">
+                      <Flame className="w-3 h-3 text-[var(--nv-primary)]" />
+                      <span className="text-[0.5rem] font-bold text-[var(--nv-primary)]">{todoStreak}</span>
                     </div>
                   )}
                 </div>
-                <p className="text-[0.55rem] text-[#444444] uppercase tracking-widest font-bold">{todayTodosCompleted}/{todayTodos.length} done</p>
+                <p className="text-[0.55rem] text-[var(--nv-subtle)] uppercase tracking-widest font-bold">{todayTodosCompleted}/{todayTodos.length} done</p>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-1.5">
               {todayTodos.length > 0 ? (
                 todayTodos.map(todo => (
-                  <div key={todo.id} className={`flex items-center gap-2 py-1.5 px-2 rounded text-sm ${todo.completed ? 'text-[#444444] line-through' : 'text-[#e0dcd8]'}`}>
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${todo.completed ? 'bg-[#ff5625]' : 'bg-[#2a2422]'}`} />
+                  <div key={todo.id} className={`flex items-center gap-2 py-1.5 px-2 rounded text-sm ${todo.completed ? 'text-[var(--nv-subtle)] line-through' : 'text-[var(--nv-foreground)]'}`}>
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${todo.completed ? 'bg-[var(--nv-primary)]' : 'bg-[var(--nv-border)]'}`} />
                     <span className="truncate">{todo.title}</span>
                   </div>
                 ))
               ) : (
-                <p className="text-xs text-[#444444]">No tasks due today</p>
+                <p className="text-xs text-[var(--nv-subtle)]">No tasks due today</p>
               )}
             </div>
           </div>
 
           {/* Habits */}
-          <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-6 flex flex-col hover:border-[#2a2422] transition-colors max-h-[280px]">
+          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-6 flex flex-col hover:border-[var(--nv-primary)] transition-colors max-h-[280px]">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[rgba(255,84,73,0.1)] rounded-lg flex items-center justify-center">
-                <Flame className="w-4 h-4 text-[#ff5449]" />
+              <div className="w-8 h-8 bg-[var(--nv-danger-soft)] rounded-lg flex items-center justify-center">
+                <Flame className="w-4 h-4 text-[var(--nv-danger)]" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-[#ff5449] uppercase tracking-wider">Habits</h3>
+                  <h3 className="text-sm font-bold text-[var(--nv-danger)] uppercase tracking-wider">Habits</h3>
                   {habitStreak > 0 && (
-                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[rgba(255,84,73,0.08)] rounded">
-                      <Flame className="w-3 h-3 text-[#ff5449]" />
-                      <span className="text-[0.5rem] font-bold text-[#ff5449]">{habitStreak}</span>
+                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[var(--nv-danger-soft)] rounded">
+                      <Flame className="w-3 h-3 text-[var(--nv-danger)]" />
+                      <span className="text-[0.5rem] font-bold text-[var(--nv-danger)]">{habitStreak}</span>
                     </div>
                   )}
                 </div>
-                <p className="text-[0.55rem] text-[#444444] uppercase tracking-widest font-bold">{todayHabitsCompleted}/{habits.length} done</p>
+                <p className="text-[0.55rem] text-[var(--nv-subtle)] uppercase tracking-widest font-bold">{todayHabitsCompleted}/{habits.length} done</p>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-1.5">
@@ -204,52 +204,52 @@ export default function DashboardPage() {
                 habits.map(habit => {
                   const done = habit.completedDates.includes(todayStr)
                   return (
-                    <div key={habit.id} className={`flex items-center gap-2 py-1.5 px-2 rounded text-sm ${done ? 'text-[#444444] line-through' : 'text-[#e0dcd8]'}`}>
-                      <div className={`w-2 h-2 rounded-full shrink-0 ${done ? 'bg-[#ff5449]' : 'bg-[#2a2422]'}`} />
+                    <div key={habit.id} className={`flex items-center gap-2 py-1.5 px-2 rounded text-sm ${done ? 'text-[var(--nv-subtle)] line-through' : 'text-[var(--nv-foreground)]'}`}>
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${done ? 'bg-[var(--nv-danger)]' : 'bg-[var(--nv-border)]'}`} />
                       <span className="truncate">{habit.title}</span>
                     </div>
                   )
                 })
               ) : (
-                <p className="text-xs text-[#444444]">No habits created yet</p>
+                <p className="text-xs text-[var(--nv-subtle)]">No habits created yet</p>
               )}
             </div>
           </div>
 
           {/* Flashcard Due */}
-          <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-6 flex flex-col hover:border-[#2a2422] transition-colors max-h-[280px]">
+          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-6 flex flex-col hover:border-[var(--nv-primary)] transition-colors max-h-[280px]">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[rgba(255,183,125,0.1)] rounded-lg flex items-center justify-center">
-                <BookOpen className="w-4 h-4 text-[#ffb77d]" />
+              <div className="w-8 h-8 bg-[var(--nv-secondary-soft)] rounded-lg flex items-center justify-center">
+                <BookOpen className="w-4 h-4 text-[var(--nv-secondary)]" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-[#ffb77d] uppercase tracking-wider">Flashcards</h3>
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[rgba(255,183,125,0.08)] rounded">
-                    <Flame className="w-3 h-3 text-[#ffb77d]" />
-                    <span className="text-[0.5rem] font-bold text-[#ffb77d]">12</span>
+                  <h3 className="text-sm font-bold text-[var(--nv-secondary)] uppercase tracking-wider">Flashcards</h3>
+                  <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[var(--nv-secondary-soft)] rounded">
+                    <Flame className="w-3 h-3 text-[var(--nv-secondary)]" />
+                    <span className="text-[0.5rem] font-bold text-[var(--nv-secondary)]">12</span>
                   </div>
                 </div>
-                <p className="text-[0.55rem] text-[#444444] uppercase tracking-widest font-bold">{totalFlashcardsDue} due · {totalFlashcardsNew} new</p>
+                <p className="text-[0.55rem] text-[var(--nv-subtle)] uppercase tracking-widest font-bold">{totalFlashcardsDue} due · {totalFlashcardsNew} new</p>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-1.5">
               {mockDecks.map((deck, i) => (
-                <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded text-sm text-[#e0dcd8]">
+                <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded text-sm text-[var(--nv-foreground)]">
                   <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#ffb77d] shrink-0" />
+                    <div className="w-2 h-2 rounded-full bg-[var(--nv-secondary)] shrink-0" />
                     <span className="truncate">{deck.name}</span>
                   </div>
-                  <span className="text-[0.55rem] font-bold text-[#ff5449] uppercase shrink-0">{deck.dueToday} due</span>
+                  <span className="text-[0.55rem] font-bold text-[var(--nv-danger)] uppercase shrink-0">{deck.dueToday} due</span>
                 </div>
               ))}
             </div>
           </div>
 
           {/* Focus Meter */}
-          <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-6 flex flex-col hover:border-[#2a2422] transition-colors relative overflow-hidden max-h-[280px]">
+          <div className="relative flex max-h-[280px] flex-col overflow-hidden rounded-lg border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 transition-colors hover:border-[var(--nv-primary)]">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[rgba(255,255,255,0.05)] rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-[var(--nv-surface-strong)] rounded-lg flex items-center justify-center">
                 <Zap className="w-4 h-4 text-white" />
               </div>
               <div>
@@ -257,12 +257,12 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="flex-1 flex flex-col justify-end gap-3">
-              <div className="h-2 bg-[#0a0808] border border-[#2a2422] rounded-full overflow-hidden">
-                <div className="h-full w-[0%] bg-gradient-to-r from-[#ff5449] via-[#ff5625] to-[#ffb77d] rounded-full" />
+              <div className="h-2 bg-[var(--nv-bg)] border border-[var(--nv-border)] rounded-full overflow-hidden">
+                <div className="h-full w-[0%] bg-gradient-to-r from-[var(--nv-danger)] via-[var(--nv-primary)] to-[var(--nv-secondary)] rounded-full" />
               </div>
               <div className="flex items-center gap-2">
-                <Sparkles className="w-3 h-3 text-[#444444]" />
-                <span className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444]">Coming Soon</span>
+                <Sparkles className="w-3 h-3 text-[var(--nv-subtle)]" />
+                <span className="text-[0.6rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)]">Coming Soon</span>
               </div>
             </div>
           </div>
@@ -284,8 +284,8 @@ export default function DashboardPage() {
               <div className="w-24 h-3 bg-black/40 blur-md rounded-full mt-[-6px]" />
               
               {/* Class Badge */}
-              <div className="mt-3 px-4 py-1.5 bg-[rgba(255,183,125,0.1)] border border-[#ffb77d]/20 rounded-lg">
-                <span className="text-[0.6rem] font-bold uppercase tracking-[0.3em] text-[#ffb77d]">Beginner</span>
+              <div className="mt-3 px-4 py-1.5 bg-[var(--nv-secondary-soft)] border border-[var(--nv-secondary)] rounded-lg">
+                <span className="text-[0.6rem] font-bold uppercase tracking-[0.3em] text-[var(--nv-secondary)]">Beginner</span>
               </div>
             </div>
 
@@ -298,10 +298,10 @@ export default function DashboardPage() {
                   <div key={stat.name} className="flex flex-col gap-0.5">
                     <div className="flex items-center gap-1.5">
                       <StatIcon className="w-3 h-3" style={{ color: stat.color }} />
-                      <span className="text-[0.5rem] font-bold uppercase tracking-wider text-[#a8a0a0]">{stat.name}</span>
+                      <span className="text-[0.5rem] font-bold uppercase tracking-wider text-[var(--nv-muted)]">{stat.name}</span>
                       <span className="text-[0.5rem] font-bold ml-auto" style={{ color: stat.color }}>{stat.value}</span>
                     </div>
-                    <div className="h-1 bg-[#141212] border border-[#2a2422] rounded-full overflow-hidden">
+                    <div className="h-1 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all duration-500"
                         style={{ width: `${pct}%`, backgroundColor: stat.color, boxShadow: `0 0 4px ${stat.color}40` }}
@@ -315,47 +315,47 @@ export default function DashboardPage() {
         </div>
 
         {/* Stats */}
-        <div className="p-6 border-t border-[#2a2422] space-y-4">
+        <div className="p-6 border-t border-[var(--nv-border)] space-y-4">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-[rgba(255,183,125,0.1)] rounded-lg flex items-center justify-center">
-              <span className="text-[#ffb77d] font-extrabold text-sm font-headline">{level}</span>
+            <div className="w-10 h-10 bg-[var(--nv-secondary-soft)] rounded-lg flex items-center justify-center">
+              <span className="text-[var(--nv-secondary)] font-extrabold text-sm font-headline">{level}</span>
             </div>
             <div className="flex flex-col flex-1">
               <p className="text-sm font-bold text-white uppercase tracking-widest font-headline">Level {level}</p>
-              <div className="flex justify-between text-[0.55rem] uppercase tracking-widest font-bold text-[#444444] mt-1">
+              <div className="flex justify-between text-[0.55rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)] mt-1">
                 <span>{xpIntoCurrentLevel} XP</span>
                 <span>{currentLevelMaxXP} XP</span>
               </div>
-              <div className="h-1 bg-[#141212] border border-[#2a2422] rounded-full overflow-hidden mt-1">
+              <div className="h-1 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-full overflow-hidden mt-1">
                 <div
-                  className="h-full bg-[#ff5625] rounded-full shadow-[0_0_6px_rgba(255,86,37,0.5)] transition-all duration-500"
+                  className="h-full bg-[var(--nv-primary)] rounded-full shadow-[0_0_6px_var(--nv-primary-glow)] transition-all duration-500"
                   style={{ width: `${xpPercentage}%` }}
                 />
               </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-between p-3 bg-[#141212] rounded-lg border border-[#2a2422]">
+          <div className="flex items-center justify-between p-3 bg-[var(--nv-surface-strong)] rounded-lg border border-[var(--nv-border)]">
             <div className="flex items-center gap-2">
               <NetheriteScrapIcon size={16} />
               <span className="text-sm font-bold text-white font-headline">{scraps || 0}</span>
-              <span className="text-[0.55rem] uppercase tracking-widest font-bold text-[#a8a0a0]">Scraps</span>
+              <span className="text-[0.55rem] uppercase tracking-widest font-bold text-[var(--nv-muted)]">Scraps</span>
             </div>
-            <ShoppingBag className="w-4 h-4 text-[#ffb77d]" />
+            <ShoppingBag className="w-4 h-4 text-[var(--nv-secondary)]" />
           </div>
         </div>
 
         {/* Next Unlocks */}
-        <div className="p-6 border-t border-[#2a2422]">
-          <h3 className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#a8a0a0] mb-4">Next Unlocks</h3>
+        <div className="p-6 border-t border-[var(--nv-border)]">
+          <h3 className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-muted)] mb-4">Next Unlocks</h3>
           <div className="space-y-3">
             {nextUnlocks.map((item) => {
               const rarity = rarityColors[item.rarity]
               return (
-                <div key={item.name} className="flex items-center gap-3 p-3 bg-[#141212] border border-[#2a2422] rounded-lg group hover:border-[#ff5625]/30 transition-all">
+                <div key={item.name} className="flex items-center gap-3 p-3 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-lg group hover:border-[var(--nv-primary)] transition-all">
                   {/* Item thumbnail instead of Lock */}
                   <div
-                    className="w-8 h-8 rounded flex items-center justify-center shrink-0 border border-[#2a2422]"
+                    className="w-8 h-8 rounded flex items-center justify-center shrink-0 border border-[var(--nv-border)]"
                     style={{ background: `linear-gradient(135deg, ${item.color}30, ${item.color}10)` }}
                   >
                     <div
@@ -371,7 +371,7 @@ export default function DashboardPage() {
                     <span className={`text-[0.55rem] font-bold uppercase tracking-wider ${rarity.text}`}>{item.rarity}</span>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-[0.6rem] font-bold text-[#ffb77d] uppercase tracking-wider">{item.price}</span>
+                    <span className="text-[0.6rem] font-bold text-[var(--nv-secondary)] uppercase tracking-wider">{item.price}</span>
                     <NetheriteScrapIcon size={12} />
                   </div>
                 </div>

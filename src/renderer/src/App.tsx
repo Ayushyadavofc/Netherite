@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { HashRouter, Routes, Route } from 'react-router-dom'
 
-import { SyncStatusModal } from './components/SyncStatusModal'
 import { MainLayout } from './components/layout/MainLayout'
 import LandingPage from './pages/LandingPage'
 import DashboardPage from './pages/DashboardPage'
@@ -92,7 +91,6 @@ export default function App() {
       <VaultThemeSync />
       <AuthInit />
       <VaultServerSyncInit />
-      <SyncStatusModal />
       <SplashScreen />
       <div className="flex flex-col h-screen">
         <div className="flex-1 overflow-hidden">

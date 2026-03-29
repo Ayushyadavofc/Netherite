@@ -245,13 +245,15 @@ export interface Profile {
   dob: string
   email: string
   avatarId: string
+  geminiApiKey?: string
 }
 export const defaultProfile: Profile = {
   name: 'Adventurer',
   gender: 'male',
   dob: '',
   email: '',
-  avatarId: ''
+  avatarId: '',
+  geminiApiKey: ''
 }
 export const useProfile = () =>
   useAccountFile<Profile>('settings', defaultProfile, {

@@ -83,7 +83,7 @@ function renderAttachment(attachment: AttachmentItem) {
       <img
         src={getAttachmentUrl(attachment.fullPath)}
         alt={attachment.name}
-        className="my-4 max-h-[340px] max-w-full rounded-xl border border-[#2a2422]"
+        className="my-4 max-h-[340px] max-w-full rounded-xl border border-[var(--nv-border)]"
         onClick={() => openAttachmentPreview(attachment)}
       />
     )
@@ -96,7 +96,7 @@ function renderAttachment(attachment: AttachmentItem) {
         src={getAttachmentUrl(attachment.fullPath)}
         preload="metadata"
         playsInline
-        className="my-4 block max-h-[420px] w-full max-w-[760px] rounded-xl border border-[#2a2422] bg-black"
+        className="my-4 block max-h-[420px] w-full max-w-[760px] rounded-xl border border-[var(--nv-border)] bg-black"
         onClick={() => openAttachmentPreview(attachment)}
       />
     )
@@ -119,7 +119,7 @@ function renderAttachment(attachment: AttachmentItem) {
       href={getAttachmentUrl(attachment.fullPath)}
       target="_blank"
       rel="noreferrer"
-      className="my-3 inline-flex rounded-full border border-[#2a2422] bg-[#141212] px-3 py-1.5 text-sm text-[#ffb77d] underline-offset-4 hover:underline"
+      className="my-3 inline-flex rounded-full border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] px-3 py-1.5 text-sm text-[var(--nv-secondary)] underline-offset-4 hover:underline"
     >
       {attachment.name}
     </a>
@@ -154,7 +154,7 @@ function MermaidBlock({ source }: { source: string }) {
 
   if (!previewDocument) {
     return (
-      <pre className="my-4 overflow-x-auto rounded-xl border border-[#2a2422] bg-[#111111] p-4 text-sm text-[#d7d2ce]">
+      <pre className="my-4 overflow-x-auto rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)] p-4 text-sm text-[#d7d2ce]">
         <code>{source}</code>
       </pre>
     )
@@ -166,7 +166,7 @@ function MermaidBlock({ source }: { source: string }) {
       referrerPolicy="no-referrer"
       title="Mermaid preview"
       srcDoc={previewDocument}
-      className="my-4 block w-full rounded-xl border border-[#2a2422] bg-[#111111]"
+      className="my-4 block w-full rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)]"
       style={{ height: frameHeight }}
     />
   )
@@ -211,19 +211,19 @@ export function MarkdownContent({
           ol: ({ children }) => <ol className="mb-4 list-decimal space-y-2 pl-6">{children}</ol>,
           li: ({ children }) => <li className="leading-7">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-4 border-l-2 border-[#ff5625]/40 pl-4 text-[#c9c2bc]">
+            <blockquote className="my-4 border-l-2 border-[var(--nv-primary)] pl-4 text-[var(--nv-muted)]">
               {children}
             </blockquote>
           ),
           table: ({ children }) => (
-            <div className="my-4 overflow-x-auto rounded-xl border border-[#2a2422]">
+            <div className="my-4 overflow-x-auto rounded-xl border border-[var(--nv-border)]">
               <table className="min-w-full border-collapse text-left text-sm">{children}</table>
             </div>
           ),
-          thead: ({ children }) => <thead className="bg-[#141212]">{children}</thead>,
-          th: ({ children }) => <th className="border-b border-[#2a2422] px-4 py-3 font-semibold text-[#ffb77d]">{children}</th>,
-          td: ({ children }) => <td className="border-b border-[#1f1d1d] px-4 py-3 align-top">{children}</td>,
-          hr: () => <hr className="my-6 border-[#2a2422]" />,
+          thead: ({ children }) => <thead className="bg-[var(--nv-surface-strong)]">{children}</thead>,
+          th: ({ children }) => <th className="border-b border-[var(--nv-border)] px-4 py-3 font-semibold text-[var(--nv-secondary)]">{children}</th>,
+          td: ({ children }) => <td className="border-b border-[var(--nv-border)] px-4 py-3 align-top">{children}</td>,
+          hr: () => <hr className="my-6 border-[var(--nv-border)]" />,
           a: ({ href = '', children }) => {
             if (href.startsWith('note://')) {
               const title = decodeURIComponent(href.slice('note://'.length))
@@ -231,7 +231,7 @@ export function MarkdownContent({
                 <button
                   type="button"
                   onClick={() => onOpenNote?.(title)}
-                  className="text-[#ffb77d] underline decoration-[#ffb77d]/40 underline-offset-4 hover:text-[#ffd2aa]"
+                  className="text-[var(--nv-secondary)] underline decoration-[var(--nv-secondary)]/40 underline-offset-4 hover:text-[var(--nv-foreground)]"
                 >
                   {children}
                 </button>
@@ -252,7 +252,7 @@ export function MarkdownContent({
                 href={href}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[#ffb77d] underline decoration-[#ffb77d]/40 underline-offset-4 hover:text-[#ffd2aa]"
+                className="text-[var(--nv-secondary)] underline decoration-[var(--nv-secondary)]/40 underline-offset-4 hover:text-[var(--nv-foreground)]"
               >
                 {children}
               </a>
@@ -265,7 +265,7 @@ export function MarkdownContent({
               <img
                 src={resolvedSrc}
                 alt={alt}
-                className="my-4 max-h-[340px] max-w-full rounded-xl border border-[#2a2422]"
+                className="my-4 max-h-[340px] max-w-full rounded-xl border border-[var(--nv-border)]"
                 onClick={() => attachment && openAttachmentPreview(attachment)}
               />
             )
@@ -284,14 +284,14 @@ export function MarkdownContent({
 
             if (inline) {
               return (
-                <code className="rounded bg-[#141212] px-1.5 py-0.5 font-mono text-[0.9em] text-[#ffb77d]">
+                <code className="rounded bg-[var(--nv-surface-strong)] px-1.5 py-0.5 font-mono text-[0.9em] text-[var(--nv-secondary)]">
                   {children}
                 </code>
               )
             }
 
             return (
-              <pre className="my-4 overflow-x-auto rounded-xl border border-[#2a2422] bg-[#111111] p-4 text-sm text-[#d7d2ce]">
+              <pre className="my-4 overflow-x-auto rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)] p-4 text-sm text-[#d7d2ce]">
                 <code>{children}</code>
               </pre>
             )

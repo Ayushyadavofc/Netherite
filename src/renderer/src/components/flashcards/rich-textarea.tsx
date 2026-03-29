@@ -95,10 +95,10 @@ function ToolbarButton({
       title={title}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
-      className={`flex h-8 w-8 items-center justify-center rounded-lg border text-[#a89f99] transition-colors ${
+      className={`flex h-8 w-8 items-center justify-center rounded-lg border text-[var(--nv-muted)] transition-colors ${
         active
-          ? 'border-[#ff5625]/35 bg-[rgba(255,86,37,0.12)] text-[#ffb77d]'
-          : 'border-transparent hover:border-[#2a2422] hover:bg-[#171414] hover:text-white'
+          ? 'border-[var(--nv-primary)] bg-[var(--nv-primary-soft)] text-[var(--nv-secondary)]'
+          : 'border-transparent hover:border-[var(--nv-border)] hover:bg-[var(--nv-surface)] hover:text-white'
       }`}
     >
       {icon}
@@ -362,12 +362,12 @@ export function RichTextarea({
 
   return (
     <>
-      <div className="overflow-hidden rounded-xl border border-[#2a2422] bg-[#0a0808]">
+      <div className="overflow-hidden rounded-xl border border-[var(--nv-border)] bg-[var(--nv-bg)]">
         <div className="flex items-center justify-between px-3 py-2">
           <div className="flex items-center gap-3">
-            <span className="text-[0.55rem] font-bold uppercase tracking-[0.22em] text-[#8c8079]">{label}</span>
+            <span className="text-[0.55rem] font-bold uppercase tracking-[0.22em] text-[var(--nv-subtle)]">{label}</span>
             {isRecording && (
-              <span className="inline-flex items-center gap-2 rounded-full border border-[#ff5449]/25 bg-[#ff5449]/10 px-2.5 py-1 text-[0.58rem] font-bold uppercase tracking-[0.14em] text-[#ff8a80]">
+              <span className="inline-flex items-center gap-2 rounded-full border border-[var(--nv-danger)] bg-[var(--nv-danger-soft)] px-2.5 py-1 text-[0.58rem] font-bold uppercase tracking-[0.14em] text-[var(--nv-danger)]">
                 <Square className="h-3.5 w-3.5 fill-current" />
                 {recordingTime}s
               </span>

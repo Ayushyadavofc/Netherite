@@ -2,8 +2,8 @@ import DOMPurify from 'dompurify'
 
 const SANDBOXED_PREVIEW_CSP = [
   "default-src 'none'",
-  "img-src data: https:",
-  "media-src data: https:",
+  "img-src data: https: local-file:",
+  "media-src data: https: local-file:",
   "style-src 'unsafe-inline'",
   "script-src 'none'",
   "connect-src 'none'",

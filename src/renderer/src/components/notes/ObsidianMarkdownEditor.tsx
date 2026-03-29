@@ -4,8 +4,8 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { EditorState, StateEffect, StateField, type Range } from '@codemirror/state'
 import { autocompletion, startCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete'
 import { markdown } from '@codemirror/lang-markdown'
-import { drawSelection, dropCursor, EditorView, Decoration, type DecorationSet, WidgetType, keymap, placeholder } from '@codemirror/view'
-import { indentOnInput, bracketMatching, foldKeymap, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
+import { drawSelection, dropCursor, EditorView, Decoration, type DecorationSet, ViewPlugin, type ViewUpdate, WidgetType, keymap, placeholder } from '@codemirror/view'
+import { indentOnInput, bracketMatching, foldGutter, foldKeymap, foldService, syntaxHighlighting, defaultHighlightStyle, syntaxTree } from '@codemirror/language'
 import { searchKeymap } from '@codemirror/search'
 import mermaid from 'mermaid'
 import {
@@ -29,6 +29,7 @@ export interface MarkdownEditorHandle {
   prefixSelectedLines: (prefix: string) => void
   insertSnippet: (snippet: string) => void
   insertWikilink: (name: string, embed?: boolean) => void
+  scrollToLine: (lineIndex: number) => void
 }
 
 interface MarkdownEditorProps {
@@ -39,6 +40,7 @@ interface MarkdownEditorProps {
   onChange: (value: string) => void
   onOpenNote: (title: string) => void
   onImportAttachment: (file: File, source?: Extract<ImportedAttachmentSource, 'paste' | 'drop'>) => Promise<string | null>
+  onActiveLineChange?: (lineIndex: number) => void
   placeholderText?: string
   minHeight?: string
   compact?: boolean
@@ -62,6 +64,32 @@ interface WikilinkMenuState {
 }
 
 const refreshDecorationsEffect = StateEffect.define<void>()
+
+const headingFoldService = foldService.of((state, lineStart) => {
+  const line = state.doc.lineAt(lineStart)
+  const match = line.text.match(/^(#{1,6})\s+/)
+  if (!match) {
+    return null
+  }
+
+  const currentLevel = match[1].length
+  let sectionEnd = state.doc.length
+
+  for (let lineNumber = line.number + 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const nextLine = state.doc.line(lineNumber)
+    const nextMatch = nextLine.text.match(/^(#{1,6})\s+/)
+    if (!nextMatch) {
+      continue
+    }
+
+    if (nextMatch[1].length <= currentLevel) {
+      sectionEnd = nextLine.from - 1
+      break
+    }
+  }
+
+  return sectionEnd > line.to ? { from: line.to, to: sectionEnd } : null
+})
 
 mermaid.initialize({
   startOnLoad: false,
@@ -153,7 +181,7 @@ class MermaidWidget extends WidgetType {
     frame.style.width = '100%'
     frame.style.height = `${estimateMermaidPreviewHeight(this.source)}px`
     frame.style.border = '0'
-    frame.style.background = '#111111'
+    frame.style.background = 'var(--nv-surface)'
     wrapper.appendChild(frame)
 
     const renderId = `mermaid-${Math.random().toString(36).slice(2)}`
@@ -344,6 +372,90 @@ function createPreviewDecorationsField(
   })
 }
 
+function buildMarkdownLivePreviewDecorations(view: EditorView) {
+  const decorations: Range<Decoration>[] = []
+  const activeLine = view.state.doc.lineAt(view.state.selection.main.head).number
+
+  for (const { from, to } of view.visibleRanges) {
+    syntaxTree(view.state).iterate({
+      from,
+      to,
+      enter(node) {
+        if (view.state.doc.lineAt(node.from).number === activeLine) {
+          return
+        }
+
+        if (node.name === 'HeaderMark' || node.name === 'EmphasisMark' || node.name === 'CodeMark') {
+          decorations.push(Decoration.replace({}).range(node.from, node.to))
+          return
+        }
+
+        if (node.node.parent?.name !== 'Link') {
+          return
+        }
+
+        if (node.name === 'LinkMark' || node.name === 'URL' || node.name === 'LinkTitle') {
+          decorations.push(Decoration.replace({}).range(node.from, node.to))
+        }
+      }
+    })
+  }
+
+  return Decoration.set(decorations, true)
+}
+
+const markdownLivePreview = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet
+
+    constructor(view: EditorView) {
+      this.decorations = buildMarkdownLivePreviewDecorations(view)
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+        this.decorations = buildMarkdownLivePreviewDecorations(update.view)
+      }
+    }
+  },
+  {
+    decorations: (value) => value.decorations
+  }
+)
+
+function buildHeadingDecorations(state: EditorState) {
+  const decorations: Range<Decoration>[] = []
+
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber)
+    const match = line.text.match(/^(#{1,6})\s+/)
+    if (!match) {
+      continue
+    }
+
+    const level = Math.min(match[1].length, 3)
+    decorations.push(
+      Decoration.line({
+        attributes: {
+          class: `cm-heading-line cm-heading-${level}`
+        }
+      }).range(line.from)
+    )
+  }
+
+  return Decoration.set(decorations, true)
+}
+
+const headingDecorationsField = StateField.define<DecorationSet>({
+  create(state) {
+    return buildHeadingDecorations(state)
+  },
+  update(value, transaction) {
+    return transaction.docChanged ? buildHeadingDecorations(transaction.state) : value
+  },
+  provide: (field) => EditorView.decorations.from(field)
+})
+
 function createInteractionHandlers(
   onOpenNote: () => (title: string) => void,
   onImportAttachment: () => (file: File, source?: 'paste' | 'drop') => Promise<string | null>
@@ -460,6 +572,7 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
       onChange,
       onOpenNote,
       onImportAttachment,
+      onActiveLineChange,
       placeholderText = 'Start writing in markdown...',
       minHeight = '100%',
       compact = false,
@@ -475,6 +588,7 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
     const onChangeRef = useRef(onChange)
     const onOpenNoteRef = useRef(onOpenNote)
     const onImportAttachmentRef = useRef(onImportAttachment)
+    const onActiveLineChangeRef = useRef(onActiveLineChange)
     const wikilinkMenuRef = useRef<WikilinkMenuState | null>(null)
     const wikilinkMenuNodeRef = useRef<HTMLDivElement | null>(null)
     const [wikilinkMenu, setWikilinkMenu] = useState<WikilinkMenuState | null>(null)
@@ -484,6 +598,7 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
     onChangeRef.current = onChange
     onOpenNoteRef.current = onOpenNote
     onImportAttachmentRef.current = onImportAttachment
+    onActiveLineChangeRef.current = onActiveLineChange
     wikilinkMenuRef.current = wikilinkMenu
 
     const syncWikilinkMenu = useCallback((view: EditorView) => {
@@ -666,9 +781,20 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
             indentWithTab
           ]),
           markdown(),
+          markdownLivePreview,
+          headingFoldService,
+          foldGutter({
+            markerDOM(open) {
+              const marker = document.createElement('span')
+              marker.className = `cm-fold-marker ${open ? 'is-open' : 'is-closed'}`
+              marker.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide"><path d="m9 18 6-6-6-6"/></svg>`
+              return marker
+            }
+          }),
           placeholder(placeholderText),
           autocompletion({ override: [completionSource] }),
           previewDecorationsField,
+          headingDecorationsField,
           interactionHandlers,
           wikilinkInteractionHandlers,
           EditorView.lineWrapping,
@@ -688,14 +814,19 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
 
             if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged) {
               syncWikilinkMenu(update.view)
+              const activeLineIndex = update.state.doc.lineAt(update.state.selection.main.head).number - 1
+              onActiveLineChangeRef.current?.(activeLineIndex)
             }
           }),
           EditorView.theme({
             '&': {
               height: '100%',
-              backgroundColor: '#0a0808',
-              color: '#e0dcd8',
-              fontSize: '14px'
+              backgroundColor: 'var(--nv-bg)',
+              color: 'color-mix(in srgb, var(--nv-foreground) 88%, var(--nv-bg) 12%)',
+              fontSize: '14px',
+              maxWidth: compact ? 'none' : '960px',
+              margin: compact ? '0' : '0 auto',
+              paddingLeft: compact ? '0' : '20px'
             },
             '.cm-scroller': {
               overflow: 'auto',
@@ -705,111 +836,165 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
             },
             '.cm-content': {
               minHeight,
-              padding: compact ? '14px 18px 24px' : '48px 56px 96px',
-              maxWidth: compact ? '100%' : '860px',
-              margin: compact ? '0' : '0 auto',
+              padding: compact ? '12px 15px 20px 4px' : '22px 30px 60px 4px',
               lineHeight: '1.7'
             },
             '.cm-focused': {
               outline: 'none'
             },
             '.cm-cursor': {
-              borderLeftColor: '#ffb77d'
+              borderLeftColor: 'var(--nv-secondary)'
             },
             '.cm-activeLine': {
-              backgroundColor: 'rgba(255, 183, 125, 0.03)'
+              backgroundColor: 'var(--nv-secondary-soft)'
             },
             '.cm-selectionBackground, ::selection': {
-              backgroundColor: 'rgba(255, 86, 37, 0.25) !important'
+              backgroundColor: 'var(--nv-primary-soft-strong) !important'
             },
             '.cm-gutters': {
-              backgroundColor: '#0a0808',
+              backgroundColor: 'transparent',
               border: 'none',
-              color: '#666666',
-              display: 'none'
+              color: 'transparent',
+              width: compact ? '18px' : '22px',
+              minWidth: compact ? '18px' : '22px',
+              overflow: 'visible',
+              paddingRight: compact ? '2px' : '4px',
+              pointerEvents: 'auto'
+            },
+            '.cm-gutterElement': {
+              width: compact ? '18px' : '22px',
+              minWidth: compact ? '18px' : '22px',
+              padding: '0',
+              overflow: 'visible',
+              position: 'relative',
+              pointerEvents: 'auto'
+            },
+            '.cm-foldGutter .cm-gutterElement': {
+              cursor: 'pointer'
+            },
+            '.cm-fold-marker': {
+              position: 'absolute',
+              right: '2px',
+              top: '50%',
+              display: 'inline-flex',
+              width: '16px',
+              height: '18px',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--nv-secondary)',
+              opacity: '0',
+              transform: 'translateY(-50%)',
+              transition: 'color 0.2s ease, opacity 0.2s ease, transform 0.2s ease'
+            },
+            '.cm-fold-marker.is-open': {
+              transform: 'translateY(-50%) rotate(90deg)'
+            },
+            '.cm-fold-marker.is-closed': {
+              transform: 'translateY(-50%) rotate(0deg)'
+            },
+            '.cm-foldGutter .cm-gutterElement:hover .cm-fold-marker': {
+              color: 'var(--nv-primary)',
+              opacity: '1'
             },
             '.cm-foldPlaceholder': {
-              backgroundColor: '#141212',
-              border: '1px solid #2a2422',
-              color: '#ffb77d'
+              backgroundColor: 'transparent',
+              border: 'none',
+              color: 'var(--nv-muted)',
+              margin: '0 4px',
+              padding: '0',
+              cursor: 'pointer'
             },
-            '.cm-note-link-token': {
-              color: '#ffb77d',
-              textDecoration: 'underline',
-              textDecorationColor: 'rgba(255, 183, 125, 0.45)',
-              textUnderlineOffset: '4px'
+            '.cm-foldPlaceholder:hover': {
+              color: 'var(--nv-foreground)'
             },
-            '.cm-broken-link-token': {
-              color: '#e0dcd8'
-            },
-            '.cm-embed-token': {
-              color: '#ffb77d'
-            },
-            '.cm-attachment-inline': {
-              display: 'inline-flex',
-              alignItems: 'center',
-              maxWidth: '320px',
-              verticalAlign: 'middle'
-            },
-            '.cm-attachment-block': {
-              display: 'block',
-              margin: '8px 0 16px'
-            },
-            '.cm-attachment-image': {
-              maxWidth: '100%',
-              maxHeight: '320px',
-              borderRadius: '12px',
-              border: '1px solid #2a2422'
-            },
-            '.cm-attachment-video': {
-              display: 'block',
-              width: '100%',
-              maxWidth: '720px',
-              maxHeight: '420px',
-              borderRadius: '12px',
-              backgroundColor: '#000000'
-            },
-            '.cm-attachment-audio': {
-              display: 'block',
-              width: '100%',
-              maxWidth: '520px'
-            },
-            '.cm-attachment-chip': {
-              display: 'inline-flex',
-              alignItems: 'center',
-              padding: '4px 10px',
-              borderRadius: '999px',
-              backgroundColor: '#141212',
-              border: '1px solid #2a2422',
-              color: '#ffb77d'
+            '.cm-tooltip': {
+              backgroundColor: 'var(--nv-surface)',
+              border: '1px solid var(--nv-border)',
+              borderRadius: '8px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
             },
             '.cm-mermaid-widget': {
               margin: '16px 0',
               padding: '16px',
               borderRadius: '14px',
-              border: '1px solid #2a2422',
-              backgroundColor: '#111111'
+              border: '1px solid var(--nv-border)',
+              backgroundColor: 'var(--nv-surface)'
             },
             '.cm-mermaid-graph': {
               overflow: 'auto'
             },
             '.cm-tooltip-autocomplete': {
-              backgroundColor: '#141212',
-              border: '1px solid #2a2422',
-              color: '#e0dcd8'
+              backgroundColor: 'var(--nv-surface-strong)',
+              border: '1px solid var(--nv-border)',
+              color: 'var(--nv-foreground)'
             },
             '.cm-tooltip-autocomplete ul li[aria-selected]': {
-              backgroundColor: 'rgba(255, 86, 37, 0.12)',
-              color: '#ff5625'
+              backgroundColor: 'var(--nv-primary-soft)',
+              color: 'var(--nv-primary)'
             },
             '.cm-scroller::-webkit-scrollbar': {
               display: hideScrollbar ? 'none' : 'block'
             },
-            '.ͼ1 .cm-formatting': {
-              color: '#5d514c'
+            '.cm-formatting-header': {
+              color: 'var(--nv-subtle)'
+            },
+            '.cm-heading-line:not(.cm-activeLine) .cm-formatting-header': {
+              display: 'inline-block',
+              width: '0',
+              opacity: '0',
+              overflow: 'hidden',
+              color: 'transparent',
+              transition: 'all 0.15s ease'
+            },
+            '.cm-heading-line.cm-activeLine .cm-formatting-header': {
+              width: 'auto',
+              opacity: '1',
+              color: 'var(--nv-subtle)'
             },
             '.cm-line': {
-              padding: '0 2px'
+              padding: '0'
+            },
+            '.cm-heading-line': {
+              color: 'color-mix(in srgb, var(--nv-foreground) 92%, var(--nv-bg) 8%)',
+              fontFamily: 'Inter, sans-serif',
+              fontWeight: '700'
+            },
+            '.cm-heading-1': {
+              fontSize: '2.25rem',
+              lineHeight: '1.2',
+              fontWeight: '800',
+              marginTop: '0.45rem',
+              marginBottom: '0.2rem'
+            },
+            '.cm-heading-2': {
+              fontSize: '1.75rem',
+              lineHeight: '1.28',
+              fontWeight: '750',
+              marginTop: '0.4rem',
+              marginBottom: '0.15rem'
+            },
+            '.cm-heading-3': {
+              fontSize: '1.35rem',
+              lineHeight: '1.35',
+              fontWeight: '700',
+              marginTop: '0.35rem'
+            },
+            '.cm-note-link-token': {
+              color: 'var(--nv-primary)',
+              textDecoration: 'none',
+              cursor: 'pointer'
+            },
+            '.cm-note-link-token:hover': {
+              textDecoration: 'underline'
+            },
+            '.cm-broken-link-token': {
+              color: 'var(--nv-muted)',
+              opacity: '0.8',
+              cursor: 'pointer'
+            },
+            '.cm-embed-token': {
+              color: 'var(--nv-secondary)',
+              cursor: 'pointer'
             }
           })
         ]
@@ -843,6 +1028,7 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
         selection: { anchor: 0 },
         scrollIntoView: true
       })
+      onActiveLineChangeRef.current?.(0)
     }, [noteId, value])
 
     useEffect(() => {
@@ -910,6 +1096,17 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
           const view = viewRef.current
           if (!view) return
           insertText(view, buildInsertedWikilink(view, name, embed))
+        },
+        scrollToLine(lineIndex: number) {
+          const view = viewRef.current
+          if (!view) return
+          const safeLine = Math.min(Math.max(lineIndex + 1, 1), view.state.doc.lines)
+          const line = view.state.doc.line(safeLine)
+          view.dispatch({
+            selection: { anchor: line.from },
+            scrollIntoView: true
+          })
+          view.focus()
         }
       }),
       []
@@ -922,7 +1119,7 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
           createPortal(
             <div
               ref={wikilinkMenuNodeRef}
-              className="fixed z-[400] w-[340px] max-w-[calc(100vw-24px)] overflow-hidden rounded-xl border border-[#2a2422] bg-[#141212] shadow-[0_18px_48px_rgba(0,0,0,0.5)]"
+              className="fixed z-[400] w-[340px] max-w-[calc(100vw-24px)] overflow-hidden rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] shadow-[0_18px_48px_rgba(0,0,0,0.5)]"
               style={{ left: wikilinkMenu.left, top: wikilinkMenu.top }}
             >
               <div className="max-h-[280px] overflow-y-auto py-1">
@@ -936,16 +1133,16 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
                     }}
                     className={`flex w-full flex-col px-4 py-3 text-left transition-colors ${
                       index === wikilinkMenu.selectedIndex
-                        ? 'bg-[rgba(255,86,37,0.14)]'
-                        : 'hover:bg-[rgba(255,255,255,0.03)]'
+                        ? 'bg-[var(--nv-primary-soft)]'
+                        : 'hover:bg-white/5'
                     }`}
                   >
-                    <span className="text-base text-[#f3eee9]">{option.label}</span>
-                    <span className="text-xs text-[#8c8079]">{option.detail}</span>
+                    <span className="text-base text-[var(--nv-foreground)]">{option.label}</span>
+                    <span className="text-xs text-[var(--nv-subtle)]">{option.detail}</span>
                   </button>
                 ))}
               </div>
-              <div className="border-t border-[#2a2422] px-3 py-2 text-[0.68rem] text-[#8c8079]">
+              <div className="border-t border-[var(--nv-border)] px-3 py-2 text-[0.68rem] text-[var(--nv-subtle)]">
                 {wikilinkMenu.embed ? 'Type to link files' : 'Type to link notes'}
               </div>
             </div>,

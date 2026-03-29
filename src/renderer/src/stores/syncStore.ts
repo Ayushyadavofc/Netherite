@@ -51,6 +51,12 @@ type RemoteVaultSnapshotDescriptor = {
   snapshotName: string
 }
 
+type PreparedVaultUpload = {
+  uploadedAt: string
+  snapshotName: string
+  zipPath: string
+}
+
 type VaultUpdateCheckResult = {
   hasUpdate: boolean
   remoteSnapshot: RemoteVaultSnapshotDescriptor | null
@@ -383,12 +389,12 @@ async function getRemoteVaultSnapshotState(userId: string, vaultId: string) {
   }
 }
 
-async function uploadVaultSnapshot(
+async function prepareVaultUpload(
   userId: string,
   vaultPath: string,
   vaultId: string,
   reportProgress: (update: SyncProgressUpdate) => void
-) {
+): Promise<PreparedVaultUpload> {
   const uploadedAt = new Date().toISOString()
   const snapshotName = buildVaultSnapshotFileName({
     timestamp: uploadedAt,
@@ -397,52 +403,47 @@ async function uploadVaultSnapshot(
     vaultId
   })
   const unsubscribe = listenForNativeSyncProgress(reportProgress)
-  let zipPath = ''
   try {
-    zipPath = await window.electronAPI.zipVault(vaultPath)
+    const zipPath = await window.electronAPI.zipVault(vaultPath)
+    return {
+      uploadedAt,
+      snapshotName,
+      zipPath
+    }
   } finally {
     unsubscribe()
   }
+}
 
+async function uploadPreparedVaultSnapshot(
+  userId: string,
+  vaultId: string,
+  prepared: PreparedVaultUpload,
+  reportProgress: (update: SyncProgressUpdate) => void
+) {
   reportProgress(createProgressUpdate('Preparing upload...'))
-  const zipFile = await readTempZipAsFile(zipPath, snapshotName)
+  const zipFile = await readTempZipAsFile(prepared.zipPath, prepared.snapshotName)
 
   reportProgress(createProgressUpdate('Uploading vault...'))
   const createdEntry = await createVaultSnapshotEntry(userId, vaultId, zipFile, (progress) => {
     reportProgress(createUploadProgressUpdate('Uploading vault...', zipFile.size, progress))
-  }, uploadedAt)
+  }, prepared.uploadedAt)
 
-  await window.electronAPI.clearTemp()
   markDeviceVaultSnapshot(vaultId, {
     id: createdEntry.$id,
-    snapshotAt: createdEntry.uploadedAt ?? uploadedAt,
-    snapshotName
+    snapshotAt: createdEntry.uploadedAt ?? prepared.uploadedAt,
+    snapshotName: prepared.snapshotName
   })
 }
 
-async function uploadLegacyVaultSnapshot(
+async function uploadPreparedLegacyVaultSnapshot(
   userId: string,
-  vaultPath: string,
   vaultId: string,
+  prepared: PreparedVaultUpload,
   reportProgress: (update: SyncProgressUpdate) => void
 ) {
-  const uploadedAt = new Date().toISOString()
-  const snapshotName = buildVaultSnapshotFileName({
-    timestamp: uploadedAt,
-    vaultName: getVaultNameFromPath(vaultPath),
-    ownerId: userId,
-    vaultId
-  })
-  const unsubscribe = listenForNativeSyncProgress(reportProgress)
-  let zipPath = ''
-  try {
-    zipPath = await window.electronAPI.zipVault(vaultPath)
-  } finally {
-    unsubscribe()
-  }
-
   reportProgress(createProgressUpdate('Preparing upload...'))
-  const zipFile = await readTempZipAsFile(zipPath, snapshotName)
+  const zipFile = await readTempZipAsFile(prepared.zipPath, prepared.snapshotName)
 
   reportProgress(createProgressUpdate('Uploading vault...'))
   const permissions = [
@@ -462,11 +463,10 @@ async function uploadLegacyVaultSnapshot(
   reportProgress(createProgressUpdate('Cleaning up previous vault snapshot...'))
   await deleteExistingSnapshots(vaultId, uploadedFile.$id)
 
-  await window.electronAPI.clearTemp()
   markDeviceVaultSnapshot(vaultId, {
     id: uploadedFile.$id,
-    snapshotAt: uploadedAt,
-    snapshotName
+    snapshotAt: prepared.uploadedAt,
+    snapshotName: prepared.snapshotName
   })
 }
 
@@ -569,8 +569,12 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     })
 
     try {
+      const prepared = await prepareVaultUpload(userId, vaultPath, vaultId, (update) => {
+        applyProgressUpdate(set, update)
+      })
+
       try {
-        await uploadVaultSnapshot(userId, vaultPath, vaultId, (update) => {
+        await uploadPreparedVaultSnapshot(userId, vaultId, prepared, (update) => {
           applyProgressUpdate(set, update)
         })
       } catch (error) {
@@ -584,7 +588,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
             applyProgressUpdate(set, update)
           })
         } else {
-          await uploadLegacyVaultSnapshot(userId, vaultPath, vaultId, (update) => {
+          await uploadPreparedLegacyVaultSnapshot(userId, vaultId, prepared, (update) => {
             applyProgressUpdate(set, update)
           })
         }
@@ -592,7 +596,6 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
 
       set({ isSyncing: false, syncStatus: 'done', progress: 'Sync complete', progressDetails: null, errorMessage: null })
     } catch (error) {
-      await window.electronAPI.clearTemp().catch(() => undefined)
       set({
         isSyncing: false,
         syncStatus: 'error',
@@ -600,6 +603,8 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
         progressDetails: null,
         errorMessage: getErrorMessage(error, 'Sync upload failed.')
       })
+    } finally {
+      await window.electronAPI.clearTemp().catch(() => undefined)
     }
   },
 
@@ -896,8 +901,12 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       const prefix = `${vault.label || `Vault ${index + 1}`} (${index + 1}/${syncTargets.length})`
 
       try {
+        const prepared = await prepareVaultUpload(userId, vault.path, vault.vaultId, (update) => {
+          applyProgressUpdate(set, update, prefix)
+        })
+
         try {
-          await uploadVaultSnapshot(userId, vault.path, vault.vaultId, (update) => {
+          await uploadPreparedVaultSnapshot(userId, vault.vaultId, prepared, (update) => {
             applyProgressUpdate(set, update, prefix)
           })
         } catch (error) {
@@ -911,7 +920,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
               applyProgressUpdate(set, update, prefix)
             })
           } else {
-            await uploadLegacyVaultSnapshot(userId, vault.path, vault.vaultId, (update) => {
+            await uploadPreparedLegacyVaultSnapshot(userId, vault.vaultId, prepared, (update) => {
               applyProgressUpdate(set, update, prefix)
             })
           }
@@ -920,10 +929,10 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       } catch (error) {
         failed += 1
         firstError ??= `${prefix}: ${getErrorMessage(error, 'Sync failed.')}`
+      } finally {
+        await window.electronAPI.clearTemp().catch(() => undefined)
       }
     }
-
-    await window.electronAPI.clearTemp().catch(() => undefined)
 
     if (failed > 0) {
       set({

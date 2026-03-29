@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Plus, ChevronRight, Link2, Play, Settings, Trash2, Shuffle, X } from 'lucide-react'
+import { Plus, ChevronRight, Link2, Play, Settings, Sparkles, Trash2, Shuffle, X } from 'lucide-react'
 import { ReviewCard } from '@/components/flashcards/review-card'
 import { StatsOverview } from '@/components/flashcards/stats-overview'
 import { RichTextarea } from '@/components/flashcards/rich-textarea'
+import { GenerateFlashcardsModal } from '@/components/flashcards/GenerateFlashcardsModal'
+import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { extractMarkdownPreviewText } from '@/components/shared/MarkdownContent'
 import { detectAttachmentKind, normalizePath, type AttachmentItem } from '@/lib/attachments'
 import { Toaster, toast } from 'sonner'
@@ -333,6 +335,7 @@ export default function FlashcardsPage() {
   const [attachmentItems, setAttachmentItems] = useState<AttachmentItem[]>([])
 
   const [showRemoveCard, setShowRemoveCard] = useState(false)
+  const [showGenerateModal, setShowGenerateModal] = useState(false)
 
   const loadDecks = async () => {
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
@@ -566,6 +569,37 @@ export default function FlashcardsPage() {
     await saveDeck(updatedDeck)
   }
 
+  const handleDeleteDeck = async (deck: Deck) => {
+    const vaultPath = localStorage.getItem('netherite-current-vault-path')
+    if (!vaultPath) return
+
+    const flashcardsDir = `${vaultPath}/flashcards`
+    const externalRefsPath = `${flashcardsDir}/externalDecks.json`
+
+    try {
+      if (isAbsolutePathLike(deck.fileName)) {
+        let externalPaths: string[] = []
+        if (await window.electronAPI.fileExists(externalRefsPath)) {
+          const content = await window.electronAPI.readFile(externalRefsPath)
+          const parsed = JSON.parse(content)
+          externalPaths = Array.isArray(parsed) ? parsed : []
+        }
+
+        const normalizedDeckPath = deck.fileName.replace(/\\/g, '/')
+        const nextExternalPaths = externalPaths.filter((entry) => entry.replace(/\\/g, '/') !== normalizedDeckPath)
+        await window.electronAPI.writeFile(externalRefsPath, JSON.stringify(nextExternalPaths, null, 2))
+      }
+
+      const fullPath = isAbsolutePathLike(deck.fileName) ? deck.fileName : `${vaultPath}/flashcards/${deck.fileName}`
+      await window.electronAPI.deleteVaultItem(fullPath)
+      setDecks((current) => current.filter((item) => item.id !== deck.id))
+      setSelectedDeckId((current) => (current === deck.id ? null : current))
+    } catch (error) {
+      toast.error('Could not delete this deck.')
+      console.error(error)
+    }
+  }
+
   const handleLinkExternalDeck = async () => {
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
     if (!vaultPath) return
@@ -605,6 +639,7 @@ export default function FlashcardsPage() {
   }
 
   const [showSettings, setShowSettings] = useState(false)
+  const [pendingDeckDelete, setPendingDeckDelete] = useState<Deck | null>(null)
   const [deckSettingsForm, setDeckSettingsForm] = useState<DeckSettings>(defaultDeckSettings)
 
   const openSettingsModal = () => {
@@ -643,13 +678,13 @@ export default function FlashcardsPage() {
   const pieTotal = totalCards || 1
 
   return (
-    <div className="flex w-full h-full bg-[#0a0808]">
+    <div className="flex w-full h-full bg-[var(--nv-bg)]">
       <Toaster richColors theme="dark" />
       {/* Sidebar */}
-      <aside className="hidden lg:flex flex-col w-64 shrink-0 z-10 sticky top-0 h-[calc(100vh-48px)] overflow-y-auto border-r border-[#2a2422] bg-[#0a0808]">
+      <aside className="hidden lg:flex flex-col w-64 shrink-0 z-10 sticky top-0 h-[calc(100vh-48px)] overflow-y-auto border-r border-[var(--nv-border)] bg-[var(--nv-bg)]">
         {/* Header */}
         <div className="p-6 pb-4">
-          <h2 className="text-xs font-bold text-[#ffb77d] uppercase tracking-[0.15em] mb-4">Decks</h2>
+          <h2 className="text-xs font-bold text-[var(--nv-secondary)] uppercase tracking-[0.15em] mb-4">Decks</h2>
         </div>
 
         {/* Deck list */}
@@ -657,45 +692,62 @@ export default function FlashcardsPage() {
           {decks.map(deck => {
             const isActive = selectedDeckId === deck.id && !isStudying
             return (
-              <button
+              <div
                 key={deck.id}
-                onClick={() => { setSelectedDeckId(deck.id); setIsStudying(false) }}
-                className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg mb-1 transition-all text-left group ${
+                className={`group mb-1 flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-3 text-left transition-all ${
                   isActive
-                    ? 'bg-[rgba(255,86,37,0.1)] border border-[#ff5625]/20'
-                    : 'border border-transparent hover:bg-[#111111]'
+                    ? 'border border-[var(--nv-primary)] bg-[var(--nv-primary-soft)]'
+                    : 'border border-transparent hover:bg-[var(--nv-surface)]'
                 }`}
+                onClick={() => { setSelectedDeckId(deck.id); setIsStudying(false) }}
               >
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-semibold truncate ${isActive ? 'text-[#ff5625]' : 'text-white'}`}>{deck.name}</p>
-                  <div className="flex items-center gap-3 mt-1">
-                    {deck.dueToday > 0 && (
-                      <span className={`text-[0.55rem] font-bold uppercase tracking-wider ${deck.isOverdue ? 'text-[#ff5449]' : 'text-[#ff5625]'}`}>
-                        {deck.dueToday} due
-                      </span>
-                    )}
-                    {deck.newCards > 0 && (
-                      <span className="text-[0.55rem] font-bold uppercase tracking-wider text-[#ffb77d]">
-                        {deck.newCards} new
-                      </span>
-                    )}
+                <div className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-semibold truncate ${isActive ? 'text-[var(--nv-primary)]' : 'text-white'}`}>{deck.name}</p>
+                    <div className="flex items-center gap-3 mt-1">
+                      {deck.dueToday > 0 && (
+                        <span className={`text-[0.55rem] font-bold uppercase tracking-wider ${deck.isOverdue ? 'text-[var(--nv-danger)]' : 'text-[var(--nv-primary)]'}`}>
+                          {deck.dueToday} due
+                        </span>
+                      )}
+                      {deck.newCards > 0 && (
+                        <span className="text-[0.55rem] font-bold uppercase tracking-wider text-[var(--nv-secondary)]">
+                          {deck.newCards} new
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <ChevronRight className={`w-4 h-4 shrink-0 transition-colors ${isActive ? 'text-[#ff5625]' : 'text-[#444444] group-hover:text-white'}`} />
-              </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setPendingDeckDelete(deck)
+                  }}
+                  className="rounded-md p-1 text-[var(--nv-subtle)] opacity-0 transition-all hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)] group-hover:opacity-100"
+                  aria-label={`Delete deck ${deck.name}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+                <ChevronRight className={`w-4 h-4 shrink-0 transition-colors ${isActive ? 'text-[var(--nv-primary)]' : 'text-[var(--nv-subtle)] group-hover:text-white'}`} />
+              </div>
             )
           })}
           {decks.length === 0 && (
-             <p className="text-xs text-[#666666] px-3 my-4 italic">No decks found...</p>
+             <p className="text-xs text-[var(--nv-subtle)] px-3 my-4 italic">No decks found...</p>
           )}
         </div>
 
         <div className="p-4 flex flex-col gap-2">
-          <button onClick={() => setShowCreateDeck(true)} className="w-full flex items-center justify-center gap-2 py-3 bg-[rgba(255,86,37,0.1)] text-[#ff5625] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:bg-[rgba(255,86,37,0.2)] transition-colors">
+          <button onClick={() => setShowGenerateModal(true)} className="w-full flex items-center justify-center gap-2 py-3 bg-[var(--nv-primary-soft)] text-[var(--nv-secondary)] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:bg-[var(--nv-primary-soft-strong)] hover:text-[var(--nv-primary)] transition-colors">
+            <Sparkles className="w-4 h-4" />
+            Generate with AI ✨
+          </button>
+          <button onClick={() => setShowCreateDeck(true)} className="w-full flex items-center justify-center gap-2 py-3 bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:bg-[var(--nv-primary-soft-strong)] transition-colors">
             <Plus className="w-4 h-4" />
             Create Deck
           </button>
-          <button onClick={handleLinkExternalDeck} className="w-full flex items-center justify-center gap-2 py-3 bg-[#111111] border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors">
+          <button onClick={handleLinkExternalDeck} className="w-full flex items-center justify-center gap-2 py-3 bg-[var(--nv-surface)] border border-[var(--nv-border)] text-[var(--nv-muted)] rounded-lg font-bold text-[0.7rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors">
             <Link2 className="h-4 w-4" />
             Link Deck
           </button>
@@ -703,21 +755,21 @@ export default function FlashcardsPage() {
 
         {/* Session Stats */}
         {isStudying && (
-          <div className="mx-4 mb-4 p-4 bg-[#141212] border border-[#2a2422] rounded-lg">
-            <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] mb-3 font-bold">Session</h4>
+          <div className="mx-4 mb-4 p-4 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-lg">
+            <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] mb-3 font-bold">Session</h4>
             <div className="flex justify-between items-end mb-3">
-              <span className="text-[#a8a0a0] text-xs uppercase">Remaining</span>
+              <span className="text-[var(--nv-muted)] text-xs uppercase">Remaining</span>
               <span className="text-xl font-bold text-white font-headline">{studyCards.length - currentCardIndex}</span>
             </div>
-            <div className="w-full bg-[#0a0808] border border-[#2a2422] h-1.5 rounded-full overflow-hidden mb-2">
+            <div className="w-full bg-[var(--nv-bg)] border border-[var(--nv-border)] h-1.5 rounded-full overflow-hidden mb-2">
               <div 
-                className="h-full bg-[#ff5625] transition-all duration-300 shadow-[0_0_8px_rgba(255,86,37,0.6)]" 
+                className="h-full bg-[var(--nv-primary)] transition-all duration-300 shadow-[0_0_8px_var(--nv-primary-glow)]" 
                 style={{ width: `${(currentCardIndex / Math.max(1, studyCards.length)) * 100}%` }}
               />
             </div>
             <button 
                onClick={() => { setIsStudying(false) }}
-               className="mt-3 w-full py-2 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded font-bold text-[0.6rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors"
+               className="mt-3 w-full py-2 bg-transparent border border-[var(--nv-border)] text-[var(--nv-muted)] rounded font-bold text-[0.6rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors"
             >
                Abort Session
             </button>
@@ -741,26 +793,26 @@ export default function FlashcardsPage() {
         ) : selectedDeck ? (
           <div className="p-8 md:p-12 max-w-4xl mx-auto w-full">
             <div className="mb-8">
-              <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] mb-1">Deck Details</p>
+              <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-subtle)] mb-1">Deck Details</p>
               <h1 className="text-3xl font-extrabold text-white font-headline">{selectedDeck.name}</h1>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
+              <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-5">
                 <p className="text-3xl font-extrabold text-white font-headline">{selectedDeck.total}</p>
-                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Total Cards</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)] mt-1">Total Cards</p>
               </div>
-              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
-                <p className="text-3xl font-extrabold text-[#ff5625] font-headline">{selectedDeck.dueToday}</p>
-                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Due Today</p>
+              <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-5">
+                <p className="text-3xl font-extrabold text-[var(--nv-primary)] font-headline">{selectedDeck.dueToday}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)] mt-1">Due Today</p>
               </div>
-              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
-                <p className="text-3xl font-extrabold text-[#ffb77d] font-headline">{selectedDeck.newCards}</p>
-                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">New Cards</p>
+              <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-5">
+                <p className="text-3xl font-extrabold text-[var(--nv-secondary)] font-headline">{selectedDeck.newCards}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)] mt-1">New Cards</p>
               </div>
-              <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-5">
-                <p className="text-xs font-bold text-[#a8a0a0]">{selectedDeck.lastStudied}</p>
-                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Last Studied</p>
+              <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-5">
+                <p className="text-xs font-bold text-[var(--nv-muted)]">{selectedDeck.lastStudied}</p>
+                <p className="text-[0.6rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)] mt-1">Last Studied</p>
               </div>
             </div>
 
@@ -768,20 +820,20 @@ export default function FlashcardsPage() {
               <button
                 onClick={() => handleStudyDeck(selectedDeck.id)}
                 disabled={studyCards.length === 0}
-                className="flex items-center gap-2 px-6 py-3 bg-[rgba(255,86,37,0.1)] border border-[#ff5625] text-[#ff5625] rounded-lg font-bold text-sm hover:bg-[rgba(255,86,37,0.25)] hover:shadow-[0_0_12px_rgba(255,86,37,0.3)] transition-all uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 rounded-lg border border-[var(--nv-primary)] px-6 py-3 text-sm font-bold uppercase tracking-widest text-[var(--nv-primary)] bg-[var(--nv-primary-soft)] transition-all hover:bg-[var(--nv-primary-soft-strong)] hover:shadow-[0_0_12px_var(--nv-primary-glow)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Play className="w-4 h-4" />
                 Start Session
               </button>
-              <button onClick={() => setShowAddCard(true)} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-[#ffb77d] hover:text-[#ffb77d] transition-all uppercase tracking-widest">
+              <button onClick={() => setShowAddCard(true)} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[var(--nv-border)] text-[var(--nv-muted)] rounded-lg font-bold text-sm hover:border-[var(--nv-secondary)] hover:text-[var(--nv-secondary)] transition-all uppercase tracking-widest">
                 <Plus className="w-4 h-4" />
                 Add Card
               </button>
-              <button onClick={() => setShowRemoveCard(true)} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-[#ff5449] hover:text-[#ff5449] transition-all uppercase tracking-widest">
+              <button onClick={() => setShowRemoveCard(true)} className="flex items-center gap-2 rounded-lg border border-[var(--nv-border)] bg-transparent px-6 py-3 text-sm font-bold uppercase tracking-widest text-[var(--nv-muted)] transition-all hover:border-[var(--nv-danger)] hover:text-[var(--nv-danger)]">
                 <Trash2 className="w-4 h-4" />
                 Remove Card
               </button>
-              <button onClick={openSettingsModal} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[#2a2422] text-[#a8a0a0] rounded-lg font-bold text-sm hover:border-white hover:text-white transition-all uppercase tracking-widest">
+              <button onClick={openSettingsModal} className="flex items-center gap-2 px-6 py-3 bg-transparent border border-[var(--nv-border)] text-[var(--nv-muted)] rounded-lg font-bold text-sm hover:border-white hover:text-white transition-all uppercase tracking-widest">
                 <Settings className="h-4 w-4" />
                 Settings
               </button>
@@ -790,71 +842,79 @@ export default function FlashcardsPage() {
         ) : (
           <div className="p-8 md:p-12 max-w-5xl mx-auto w-full space-y-12">
             <div>
-              <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] mb-1">Overview</p>
+              <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-subtle)] mb-1">Overview</p>
               <h1 className="text-3xl font-extrabold text-white font-headline">Flashcards</h1>
             </div>
 
-            <div>
-              <h2 className="mb-6 text-sm font-bold text-[#ffb77d] uppercase tracking-[0.2em]">Global Metrics</h2>
-              <StatsOverview 
-                todayReview={totalDue}
-                newCards={totalNew}
-                learningCards={learning}
-                dueCards={totalDue}
-                totalCards={totalCards}
-                mastered={mastered}
-                streak={12}
-              />
-            </div>
-
-            <div className="flex flex-col md:flex-row gap-8 items-start">
-              <div className="flex flex-col items-center gap-4">
-                <h3 className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#a8a0a0]">Card Distribution</h3>
-                <div className="relative w-40 h-40">
-                  <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                    <circle cx="18" cy="18" r="14" fill="none" stroke="#2a2422" strokeWidth="4" />
-                    <circle cx="18" cy="18" r="14" fill="none" stroke="#ff5625" strokeWidth="4"
-                      strokeDasharray={`${(mastered / pieTotal) * 88} 88`}
-                      strokeDashoffset="0"
-                    />
-                    <circle cx="18" cy="18" r="14" fill="none" stroke="#ffb77d" strokeWidth="4"
-                      strokeDasharray={`${(learning / pieTotal) * 88} 88`}
-                      strokeDashoffset={`${-(mastered / pieTotal) * 88}`}
-                    />
-                  </svg>
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-xl font-extrabold text-white font-headline">{totalCards}</span>
-                  </div>
-                </div>
-                <div className="flex gap-4 text-[0.55rem] uppercase tracking-widest font-bold">
-                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#ff5625]" /><span className="text-[#a8a0a0]">Mastered</span></div>
-                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#ffb77d]" /><span className="text-[#a8a0a0]">Learning</span></div>
-                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#2a2422]" /><span className="text-[#a8a0a0]">Unseen</span></div>
-                </div>
+            <div className="grid gap-12 xl:grid-cols-[minmax(280px,0.35fr)_minmax(0,0.65fr)] xl:items-start">
+              <div className="min-w-0">
+                <h2 className="mb-6 text-sm font-bold text-[var(--nv-secondary)] uppercase tracking-[0.2em]">Global Metrics</h2>
+                <StatsOverview 
+                  todayReview={totalDue}
+                  newCards={totalNew}
+                  learningCards={learning}
+                  dueCards={totalDue}
+                  totalCards={totalCards}
+                  mastered={mastered}
+                  streak={12}
+                />
               </div>
 
-              <div className="flex-1 flex flex-col gap-4">
-                <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-6">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-2">Mixed Review</h3>
-                  <p className="text-xs text-[#666666] mb-4">Study all cards from every deck shuffled together.</p>
-                  <button
-                    onClick={handleStudyAllMixed}
-                    disabled={studyCards.length === 0}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-[rgba(255,86,37,0.1)] border border-[#ff5625] text-[#ff5625] rounded-lg font-bold text-sm hover:bg-[rgba(255,86,37,0.25)] hover:shadow-[0_0_12px_rgba(255,86,37,0.3)] transition-all uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Shuffle className="w-4 h-4" />
-                    Study All
-                  </button>
+              <div className="min-w-0 space-y-6">
+                <div className="rounded-[20px] border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 md:p-7">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="max-w-xl">
+                      <h3 className="mb-2 text-sm font-bold uppercase tracking-[0.18em] text-white">Mixed Review</h3>
+                      <p className="text-sm text-[var(--nv-subtle)]">Study all cards from every deck shuffled together.</p>
+                    </div>
+                    <button
+                      onClick={handleStudyAllMixed}
+                      disabled={studyCards.length === 0}
+                      className="flex items-center gap-2 rounded-lg border border-[var(--nv-primary)] bg-[var(--nv-primary-soft)] px-5 py-2.5 text-sm font-bold uppercase tracking-widest text-[var(--nv-primary)] transition-all hover:bg-[var(--nv-primary-soft-strong)] hover:shadow-[0_0_12px_var(--nv-primary-glow)] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Shuffle className="w-4 h-4" />
+                      Study All
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-4">
-                    <p className="text-2xl font-extrabold text-[#ff5449] font-headline">{totalDue}</p>
-                    <p className="text-[0.55rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Total Due</p>
+                <div className="grid gap-6 lg:grid-cols-[minmax(240px,0.46fr)_minmax(0,0.54fr)]">
+                  <div className="rounded-[20px] border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6">
+                    <h3 className="mb-5 text-[0.6rem] font-bold uppercase tracking-[0.3em] text-[var(--nv-muted)]">Card Distribution</h3>
+                    <div className="flex flex-col items-center gap-5">
+                      <div className="relative h-44 w-44">
+                        <svg viewBox="0 0 36 36" className="h-full w-full -rotate-90">
+                          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--nv-border)" strokeWidth="4" />
+                          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--nv-primary)" strokeWidth="4"
+                            strokeDasharray={`${(mastered / pieTotal) * 88} 88`}
+                            strokeDashoffset="0"
+                          />
+                          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--nv-secondary)" strokeWidth="4"
+                            strokeDasharray={`${(learning / pieTotal) * 88} 88`}
+                            strokeDashoffset={`${-(mastered / pieTotal) * 88}`}
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <span className="text-xl font-extrabold text-white font-headline">{totalCards}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-[0.55rem] uppercase tracking-widest font-bold">
+                        <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--nv-primary)]" /><span className="text-[var(--nv-muted)]">Mastered</span></div>
+                        <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--nv-secondary)]" /><span className="text-[var(--nv-muted)]">Learning</span></div>
+                        <div className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--nv-border)]" /><span className="text-[var(--nv-muted)]">Unseen</span></div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="bg-[#111111] border border-[#1f1d1d] rounded-lg p-4">
-                    <p className="text-2xl font-extrabold text-[#ffb77d] font-headline">{totalNew}</p>
-                    <p className="text-[0.55rem] uppercase tracking-widest font-bold text-[#444444] mt-1">Total New</p>
+
+                  <div className="grid gap-4 self-stretch sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                    <div className="flex min-h-[150px] flex-col justify-between rounded-[20px] border border-[var(--nv-border)] bg-[var(--nv-surface)] p-5">
+                      <div className="text-[0.55rem] font-bold uppercase tracking-[0.24em] text-[var(--nv-subtle)]">Total Due</div>
+                      <p className="text-4xl font-extrabold text-[var(--nv-danger)] font-headline">{totalDue}</p>
+                    </div>
+                    <div className="flex min-h-[150px] flex-col justify-between rounded-[20px] border border-[var(--nv-border)] bg-[var(--nv-surface)] p-5">
+                      <div className="text-[0.55rem] font-bold uppercase tracking-[0.24em] text-[var(--nv-subtle)]">Total New</div>
+                      <p className="text-4xl font-extrabold text-[var(--nv-secondary)] font-headline">{totalNew}</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -864,20 +924,44 @@ export default function FlashcardsPage() {
       </section>
 
       {/* Modals */}
+      <GenerateFlashcardsModal
+        isOpen={showGenerateModal}
+        onClose={() => setShowGenerateModal(false)}
+        decks={decks}
+        onDecksChanged={loadDecks}
+      />
+
+      <DeleteConfirmDialog
+        open={pendingDeckDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDeckDelete(null)
+          }
+        }}
+        title={pendingDeckDelete ? `Delete deck "${pendingDeckDelete.name}"?` : 'Delete deck?'}
+        description="This deck file will be removed from your vault. This cannot be undone."
+        onConfirm={() => {
+          if (pendingDeckDelete) {
+            void handleDeleteDeck(pendingDeckDelete)
+            setPendingDeckDelete(null)
+          }
+        }}
+      />
+
       {showCreateDeck && (
         <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100]">
-          <form onSubmit={handleCreateDeckSubmit} className="bg-[#111111] border border-[#2a2422] rounded-xl p-8 w-full max-w-md shadow-[0_0_40px_rgba(0,0,0,0.8)]">
+          <form onSubmit={handleCreateDeckSubmit} className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-xl p-8 w-full max-w-md shadow-[0_0_40px_rgba(0,0,0,0.8)]">
             <h3 className="text-xl font-bold text-white mb-6">Create New Deck</h3>
             <input 
               autoFocus
-              className="w-full bg-[#0a0808] border border-[#2a2422] rounded-lg py-3 px-4 text-white focus:border-[#ff5625] outline-none transition-colors mb-6 font-mono text-sm"
+              className="w-full bg-[var(--nv-bg)] border border-[var(--nv-border)] rounded-lg py-3 px-4 text-white focus:border-[var(--nv-primary)] outline-none transition-colors mb-6 font-mono text-sm"
               placeholder="Deck Name (e.g. Science)"
               value={newDeckName}
               onChange={e => setNewDeckName(e.target.value)}
             />
             <div className="flex gap-4 justify-end">
-              <button type="button" onClick={() => setShowCreateDeck(false)} className="px-5 py-2 text-[#a8a0a0] hover:text-white transition-colors text-sm font-bold">Cancel</button>
-              <button type="submit" className="px-5 py-2 bg-[rgba(255,86,37,0.1)] text-[#ff5625] border border-[#ff5625]/20 rounded-lg font-bold text-sm hover:bg-[#ff5625] hover:text-white transition-colors">Create Deck</button>
+              <button type="button" onClick={() => setShowCreateDeck(false)} className="px-5 py-2 text-[var(--nv-muted)] hover:text-white transition-colors text-sm font-bold">Cancel</button>
+              <button type="submit" className="rounded-lg border border-[var(--nv-primary)] bg-[var(--nv-primary-soft)] px-5 py-2 text-sm font-bold text-[var(--nv-primary)] transition-colors hover:bg-[var(--nv-primary)] hover:text-[var(--nv-foreground)]">Create Deck</button>
             </div>
           </form>
         </div>
@@ -885,15 +969,15 @@ export default function FlashcardsPage() {
 
       {showAddCard && (
         <div className="absolute inset-0 z-[100] overflow-y-auto bg-black/80 p-6 backdrop-blur-sm">
-          <form onSubmit={handleAddCardSubmit} className="mx-auto flex max-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col gap-5 overflow-y-auto rounded-xl border border-[#2a2422] bg-[#111111] p-6 shadow-[0_0_40px_rgba(0,0,0,0.8)]">
+          <form onSubmit={handleAddCardSubmit} className="mx-auto flex max-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col gap-5 overflow-y-auto rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 shadow-[0_0_40px_rgba(0,0,0,0.8)]">
             <h3 className="text-xl font-bold text-white font-headline">Add Card to {selectedDeck?.name}</h3>
             
             <RichTextarea value={newQuestion} onChange={setNewQuestion} label="Question" minHeight="220px" />
             <RichTextarea value={newAnswer} onChange={setNewAnswer} label="Answer" minHeight="220px" />
 
             <div className="mt-2 flex justify-end gap-4">
-              <button type="button" onClick={() => setShowAddCard(false)} className="px-5 py-2 text-[#a8a0a0] hover:text-white transition-colors text-sm font-bold">Cancel</button>
-              <button type="submit" className="px-5 py-2 bg-[rgba(255,86,37,0.1)] text-[#ff5625] border border-[#ff5625]/20 rounded-lg font-bold text-sm hover:bg-[#ff5625] hover:text-white transition-colors">Save Card</button>
+              <button type="button" onClick={() => setShowAddCard(false)} className="px-5 py-2 text-[var(--nv-muted)] hover:text-white transition-colors text-sm font-bold">Cancel</button>
+              <button type="submit" className="rounded-lg border border-[var(--nv-primary)] bg-[var(--nv-primary-soft)] px-5 py-2 text-sm font-bold text-[var(--nv-primary)] transition-colors hover:bg-[var(--nv-primary)] hover:text-[var(--nv-foreground)]">Save Card</button>
             </div>
           </form>
         </div>
@@ -901,26 +985,26 @@ export default function FlashcardsPage() {
 
       {showRemoveCard && selectedDeck && (
         <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] py-12">
-          <div className="bg-[#111111] border border-[#2a2422] rounded-xl p-8 w-full max-w-3xl h-full max-h-[80vh] flex flex-col gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)]">
-            <div className="flex justify-between items-center border-b border-[#2a2422] pb-4 shrink-0">
+          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-xl p-8 w-full max-w-3xl h-full max-h-[80vh] flex flex-col gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)]">
+            <div className="flex justify-between items-center border-b border-[var(--nv-border)] pb-4 shrink-0">
               <h3 className="text-2xl font-bold text-white font-headline">Remove Cards</h3>
-              <button onClick={() => setShowRemoveCard(false)} className="text-[#a8a0a0] hover:text-white transition-colors">
+              <button onClick={() => setShowRemoveCard(false)} className="text-[var(--nv-muted)] hover:text-white transition-colors">
                 <X className="w-6 h-6" />
               </button>
             </div>
             
             <div className="flex-1 overflow-y-auto pr-2 space-y-3">
-              {selectedDeck.cards.length === 0 && <p className="text-[#a8a0a0] text-sm py-8 text-center italic">No cards in this deck.</p>}
+              {selectedDeck.cards.length === 0 && <p className="text-[var(--nv-muted)] text-sm py-8 text-center italic">No cards in this deck.</p>}
               {selectedDeck.cards.map(card => (
-                <div key={card.id} className="flex gap-4 items-start p-4 bg-[#0a0808] border border-[#1f1d1d] rounded-lg hover:border-[#2a2422] transition-colors">
+                <div key={card.id} className="flex gap-4 items-start p-4 bg-[var(--nv-bg)] border border-[var(--nv-border)] rounded-lg hover:border-[var(--nv-border)] transition-colors">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white font-bold mb-2 break-words leading-relaxed">{extractMarkdownPreviewText(card.question) || 'Untitled question'}</p>
-                    <p className="text-xs text-[#a8a0a0] break-words leading-relaxed">{extractMarkdownPreviewText(card.answer) || 'No answer'}</p>
-                    <p className="text-[0.6rem] uppercase tracking-widest text-[#666666] mt-3 font-bold">Reps: {card.sm2.reps} · Ease: {card.sm2.ease.toFixed(2)}</p>
+                    <p className="text-xs text-[var(--nv-muted)] break-words leading-relaxed">{extractMarkdownPreviewText(card.answer) || 'No answer'}</p>
+                    <p className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-subtle)] mt-3 font-bold">Reps: {card.sm2.reps} · Ease: {card.sm2.ease.toFixed(2)}</p>
                   </div>
                   <button 
                     onClick={() => handleRemoveCard(card.id)}
-                    className="p-3 text-[#ff5449]/70 hover:text-[#ff5449] hover:bg-[rgba(255,84,73,0.1)] rounded-lg transition-all"
+                    className="rounded-lg p-3 text-[var(--nv-danger)] opacity-70 transition-all hover:bg-[var(--nv-danger-soft)] hover:opacity-100"
                   >
                     <Trash2 className="w-5 h-5" />
                   </button>
@@ -933,62 +1017,62 @@ export default function FlashcardsPage() {
 
       {showSettings && selectedDeck && (
         <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] py-12">
-          <form onSubmit={handleSaveSettings} className="bg-[#111111] border border-[#2a2422] rounded-xl p-8 w-full max-w-4xl max-h-[90vh] flex flex-col gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] overflow-y-auto relative">
-            <div className="flex justify-between items-center border-b border-[#2a2422] pb-4 shrink-0 sticky top-0 bg-[#111111] z-10 w-full">
+          <form onSubmit={handleSaveSettings} className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-xl p-8 w-full max-w-4xl max-h-[90vh] flex flex-col gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] overflow-y-auto relative">
+            <div className="flex justify-between items-center border-b border-[var(--nv-border)] pb-4 shrink-0 sticky top-0 bg-[var(--nv-surface)] z-10 w-full">
               <h3 className="text-2xl font-bold text-white font-headline">Deck Options: {selectedDeck.name}</h3>
-              <button type="button" onClick={() => setShowSettings(false)} className="text-[#a8a0a0] hover:text-white transition-colors">
+              <button type="button" onClick={() => setShowSettings(false)} className="text-[var(--nv-muted)] hover:text-white transition-colors">
                 <X className="w-6 h-6" />
               </button>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pb-6 border-b border-[#2a2422]">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pb-6 border-b border-[var(--nv-border)]">
               {/* Daily Limits */}
-              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Daily Limits</h4>
+              <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Daily Limits</h4>
                 <div className="space-y-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">New cards/day</label>
-                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">New cards/day</label>
+                    <input type="number" step="1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.newCardsPerDay} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, newCardsPerDay: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Maximum reviews/day</label>
-                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Maximum reviews/day</label>
+                    <input type="number" step="1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.maximumReviewsPerDay} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, maximumReviewsPerDay: val})) } }} />
                   </div>
                   <div className="flex items-center justify-between">
-                    <label className="text-xs text-[#a8a0a0] font-bold">New cards ignore review limit</label>
-                    <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.newCardsIgnoreReviewLimit} onChange={e => setDeckSettingsForm(p => ({...p, newCardsIgnoreReviewLimit: e.target.checked}))} />
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">New cards ignore review limit</label>
+                    <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.newCardsIgnoreReviewLimit} onChange={e => setDeckSettingsForm(p => ({...p, newCardsIgnoreReviewLimit: e.target.checked}))} />
                   </div>
                   <div className="flex items-center justify-between">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Limits start from top</label>
-                    <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.limitsStartFromTop} onChange={e => setDeckSettingsForm(p => ({...p, limitsStartFromTop: e.target.checked}))} />
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Limits start from top</label>
+                    <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.limitsStartFromTop} onChange={e => setDeckSettingsForm(p => ({...p, limitsStartFromTop: e.target.checked}))} />
                   </div>
                 </div>
               </div>
 
               {/* New Cards */}
-              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#ffb77d] font-bold mb-4">New Cards</h4>
+              <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-secondary)] font-bold mb-4">New Cards</h4>
                 <div className="space-y-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Learning steps (mins space-separated)</label>
-                    <input type="text" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Learning steps (mins space-separated)</label>
+                    <input type="text" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.learningSteps} onChange={e => setDeckSettingsForm(p => ({...p, learningSteps: e.target.value}))} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Graduating Interval (days)</label>
-                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Graduating Interval (days)</label>
+                    <input type="number" step="0.1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.graduatingInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, graduatingInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Easy Interval (days)</label>
-                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Easy Interval (days)</label>
+                    <input type="number" step="0.1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.easyInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, easyInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Insertion order</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Insertion order</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.insertionOrder} onChange={e => setDeckSettingsForm(p => ({...p, insertionOrder: e.target.value as 'Sequential'|'Random'}))}
                     >
                       <option value="Sequential">Sequential (oldest cards first)</option>
@@ -999,27 +1083,27 @@ export default function FlashcardsPage() {
               </div>
 
               {/* Lapses */}
-              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#ff5449] font-bold mb-4">Lapses</h4>
+              <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-danger)] font-bold mb-4">Lapses</h4>
                 <div className="space-y-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Relearning steps (mins space-separated)</label>
-                    <input type="text" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Relearning steps (mins space-separated)</label>
+                    <input type="text" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.relearningSteps} onChange={e => setDeckSettingsForm(p => ({...p, relearningSteps: e.target.value}))} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Minimum Interval (days)</label>
-                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Minimum Interval (days)</label>
+                    <input type="number" step="0.1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.minimumInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, minimumInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Leech threshold</label>
-                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Leech threshold</label>
+                    <input type="number" step="1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.leechThreshold} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, leechThreshold: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Leech action</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Leech action</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.leechAction} onChange={e => setDeckSettingsForm(p => ({...p, leechAction: e.target.value as 'Suspend'|'Tag Only'}))}
                     >
                       <option value="Suspend">Suspend</option>
@@ -1030,38 +1114,38 @@ export default function FlashcardsPage() {
               </div>
 
               {/* Advanced */}
-              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Advanced</h4>
+              <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Advanced</h4>
                 <div className="space-y-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Maximum interval (days)</label>
-                    <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Maximum interval (days)</label>
+                    <input type="number" step="1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.maximumInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, maximumInterval: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Starting ease</label>
-                    <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Starting ease</label>
+                    <input type="number" step="0.1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.startingEase} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, startingEase: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Easy bonus</label>
-                    <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Easy bonus</label>
+                    <input type="number" step="0.05" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.easyBonus} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, easyBonus: val})) } }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Interval modifier</label>
-                    <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Interval modifier</label>
+                    <input type="number" step="0.05" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                       value={deckSettingsForm.intervalModifier} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, intervalModifier: val})) } }} />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Hard interval</label>
-                      <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Hard interval</label>
+                      <input type="number" step="0.05" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                         value={deckSettingsForm.hardInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, hardInterval: val})) } }} />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">New interval</label>
-                      <input type="number" step="0.05" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">New interval</label>
+                      <input type="number" step="0.05" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                         value={deckSettingsForm.newInterval} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, newInterval: val})) } }} />
                     </div>
                   </div>
@@ -1069,28 +1153,28 @@ export default function FlashcardsPage() {
               </div>
 
               {/* Display Order */}
-              <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Display Order</h4>
+              <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Display Order</h4>
                 <div className="space-y-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">New card gather order</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">New card gather order</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.newCardGatherOrder} onChange={e => setDeckSettingsForm(p => ({...p, newCardGatherOrder: e.target.value}))}>
                       <option value="Deck">Deck</option>
                       <option value="Random">Random</option>
                     </select>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">New card sort order</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">New card sort order</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.newCardSortOrder} onChange={e => setDeckSettingsForm(p => ({...p, newCardSortOrder: e.target.value}))}>
                       <option value="Card type, then order gathered">Card type, then order gathered</option>
                       <option value="Random">Random</option>
                     </select>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">New/review order</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">New/review order</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.newReviewOrder} onChange={e => setDeckSettingsForm(p => ({...p, newReviewOrder: e.target.value}))}>
                       <option value="Mix with reviews">Mix with reviews</option>
                       <option value="Show after reviews">Show after reviews</option>
@@ -1098,8 +1182,8 @@ export default function FlashcardsPage() {
                     </select>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Interday learning/review order</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Interday learning/review order</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.interdayLearningReviewOrder} onChange={e => setDeckSettingsForm(p => ({...p, interdayLearningReviewOrder: e.target.value}))}>
                       <option value="Mix with reviews">Mix with reviews</option>
                       <option value="Show after reviews">Show after reviews</option>
@@ -1107,8 +1191,8 @@ export default function FlashcardsPage() {
                     </select>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs text-[#a8a0a0] font-bold">Review sort order</label>
-                    <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                    <label className="text-xs text-[var(--nv-muted)] font-bold">Review sort order</label>
+                    <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                       value={deckSettingsForm.reviewSortOrder} onChange={e => setDeckSettingsForm(p => ({...p, reviewSortOrder: e.target.value}))}>
                       <option value="Due date, then random">Due date, then random</option>
                       <option value="Random">Random</option>
@@ -1119,35 +1203,35 @@ export default function FlashcardsPage() {
 
               {/* Timers & Audio */}
               <div className="flex flex-col gap-8">
-                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Timers</h4>
+                <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Timers</h4>
                   <div className="space-y-4">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Maximum answer seconds</label>
-                      <input type="number" step="1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Maximum answer seconds</label>
+                      <input type="number" step="1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                         value={deckSettingsForm.maximumAnswerSeconds} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, maximumAnswerSeconds: val})) } }} />
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Show on-screen timer</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.showOnScreenTimer} onChange={e => setDeckSettingsForm(p => ({...p, showOnScreenTimer: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Show on-screen timer</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.showOnScreenTimer} onChange={e => setDeckSettingsForm(p => ({...p, showOnScreenTimer: e.target.checked}))} />
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Stop on-screen timer on answer</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.stopTimerOnAnswer} onChange={e => setDeckSettingsForm(p => ({...p, stopTimerOnAnswer: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Stop on-screen timer on answer</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.stopTimerOnAnswer} onChange={e => setDeckSettingsForm(p => ({...p, stopTimerOnAnswer: e.target.checked}))} />
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Audio</h4>
+                <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Audio</h4>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Don't play audio automatically</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.dontPlayAudioAutomatically} onChange={e => setDeckSettingsForm(p => ({...p, dontPlayAudioAutomatically: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Don't play audio automatically</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.dontPlayAudioAutomatically} onChange={e => setDeckSettingsForm(p => ({...p, dontPlayAudioAutomatically: e.target.checked}))} />
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Skip question when replaying answer</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.skipQuestionWhenReplayingAnswer} onChange={e => setDeckSettingsForm(p => ({...p, skipQuestionWhenReplayingAnswer: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Skip question when replaying answer</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.skipQuestionWhenReplayingAnswer} onChange={e => setDeckSettingsForm(p => ({...p, skipQuestionWhenReplayingAnswer: e.target.checked}))} />
                     </div>
                   </div>
                 </div>
@@ -1155,54 +1239,54 @@ export default function FlashcardsPage() {
 
               {/* Burying & Auto Advance */}
               <div className="flex flex-col gap-8">
-                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Burying</h4>
+                <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Burying</h4>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Bury new siblings</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.buryNewSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryNewSiblings: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Bury new siblings</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.buryNewSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryNewSiblings: e.target.checked}))} />
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Bury review siblings</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.buryReviewSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryReviewSiblings: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Bury review siblings</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.buryReviewSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryReviewSiblings: e.target.checked}))} />
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Bury interday learning siblings</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.buryInterdayLearningSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryInterdayLearningSiblings: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Bury interday learning siblings</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.buryInterdayLearningSiblings} onChange={e => setDeckSettingsForm(p => ({...p, buryInterdayLearningSiblings: e.target.checked}))} />
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-[#0a0808] border border-[#2a2422] p-5 rounded-lg">
-                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[#a8a0a0] font-bold mb-4">Auto Advance</h4>
+                <div className="bg-[var(--nv-bg)] border border-[var(--nv-border)] p-5 rounded-lg">
+                  <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] font-bold mb-4">Auto Advance</h4>
                   <div className="space-y-4">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Seconds to show question for</label>
-                      <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Seconds to show question for</label>
+                      <input type="number" step="0.1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                         value={deckSettingsForm.secondsToShowQuestion} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, secondsToShowQuestion: val})) } }} />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Seconds to show answer for</label>
-                      <input type="number" step="0.1" className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[#ff5625] w-full"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Seconds to show answer for</label>
+                      <input type="number" step="0.1" className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white font-mono text-sm outline-none focus:border-[var(--nv-primary)] w-full"
                         value={deckSettingsForm.secondsToShowAnswer} onChange={e => { const val = parseFloat(e.target.value); if (!isNaN(val) && val > 0) { setDeckSettingsForm(p => ({...p, secondsToShowAnswer: val})) } }} />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Question action</label>
-                      <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Question action</label>
+                      <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                         value={deckSettingsForm.questionAction} onChange={e => setDeckSettingsForm(p => ({...p, questionAction: e.target.value}))}>
                         <option value="Show Answer">Show Answer</option>
                       </select>
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Answer action</label>
-                      <select className="bg-[#111111] border border-[#2a2422] rounded px-3 py-2 text-white outline-none focus:border-[#ff5625] w-full text-xs"
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Answer action</label>
+                      <select className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded px-3 py-2 text-white outline-none focus:border-[var(--nv-primary)] w-full text-xs"
                         value={deckSettingsForm.answerAction} onChange={e => setDeckSettingsForm(p => ({...p, answerAction: e.target.value}))}>
                         <option value="Bury Card">Bury Card</option>
                       </select>
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs text-[#a8a0a0] font-bold">Wait for audio</label>
-                      <input type="checkbox" className="w-4 h-4 accent-[#ff5625]" checked={deckSettingsForm.waitForAudio} onChange={e => setDeckSettingsForm(p => ({...p, waitForAudio: e.target.checked}))} />
+                      <label className="text-xs text-[var(--nv-muted)] font-bold">Wait for audio</label>
+                      <input type="checkbox" className="h-4 w-4 accent-[var(--nv-primary)]" checked={deckSettingsForm.waitForAudio} onChange={e => setDeckSettingsForm(p => ({...p, waitForAudio: e.target.checked}))} />
                     </div>
                   </div>
                 </div>
@@ -1211,8 +1295,8 @@ export default function FlashcardsPage() {
             </div>
 
             <div className="flex justify-end gap-3 shrink-0 pt-2">
-              <button type="button" onClick={() => setShowSettings(false)} className="px-5 py-2 text-[#a8a0a0] hover:text-white transition-colors text-sm font-bold">Cancel</button>
-              <button type="submit" className="px-5 py-2 bg-[rgba(255,86,37,0.1)] text-[#ff5625] border border-[#ff5625]/20 rounded-lg font-bold text-sm hover:bg-[#ff5625] hover:text-white transition-colors">Save Settings</button>
+              <button type="button" onClick={() => setShowSettings(false)} className="px-5 py-2 text-[var(--nv-muted)] hover:text-white transition-colors text-sm font-bold">Cancel</button>
+              <button type="submit" className="rounded-lg border border-[var(--nv-primary)] bg-[var(--nv-primary-soft)] px-5 py-2 text-sm font-bold text-[var(--nv-primary)] transition-colors hover:bg-[var(--nv-primary)] hover:text-[var(--nv-foreground)]">Save Settings</button>
             </div>
           </form>
         </div>

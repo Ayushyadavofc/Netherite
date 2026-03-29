@@ -48,9 +48,15 @@ export interface ElectronAPI {
   createFolder: (dirPath: string) => Promise<boolean>
   createNoteFolder: (vaultPath: string, folderRelativePath: string) => Promise<string>
   renameNoteItem: (oldPath: string, newPath: string) => Promise<string>
+  deleteNoteItem: (targetPath: string) => Promise<boolean>
+  deleteVaultItem: (targetPath: string) => Promise<boolean>
   selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
   writeBinaryFile: (filePath: string, data: ArrayBuffer) => Promise<boolean>
   copyFile: (srcPath: string, destPath: string) => Promise<boolean>
+  generateFlashcards: (
+    notes: { name: string; content: string }[],
+    apiKey: string
+  ) => Promise<{ front: string; back: string }[]>
   minimize: () => void
   maximize: () => void
   close: () => void

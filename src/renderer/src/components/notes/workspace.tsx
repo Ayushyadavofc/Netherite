@@ -15,12 +15,15 @@ import {
   PenTool,
   Plus,
   Search,
-  Square
+  Square,
+  Trash2,
+  X
 } from 'lucide-react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { Toaster, toast } from 'sonner'
 
 import { AdvancedCanvas } from '../ui/AdvancedCanvas'
+import { DeleteConfirmDialog } from '../shared/DeleteConfirmDialog'
 import { GraphView } from './GraphView'
 import { ObsidianMarkdownEditor, type MarkdownEditorHandle } from './ObsidianMarkdownEditor'
 import {
@@ -62,6 +65,13 @@ interface FolderRecord {
 interface ContextMenuState {
   x: number
   y: number
+}
+
+interface PendingDeleteState {
+  kind: 'note' | 'folder'
+  label: string
+  scope: 'notes' | 'vault'
+  targetPath: string
 }
 
 interface GraphNode {
@@ -268,6 +278,8 @@ export function Workspace() {
   const [dropTargetFolderPath, setDropTargetFolderPath] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
+  const [activeLineIndex, setActiveLineIndex] = useState(0)
+  const [pendingDelete, setPendingDelete] = useState<PendingDeleteState | null>(null)
 
   const saveTimerRef = useRef<number | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
@@ -282,6 +294,10 @@ export function Workspace() {
     const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null
     selectedNotePathRef.current = selectedNote?.fullPath ?? null
   }, [notes, selectedNoteId])
+
+  useEffect(() => {
+    setActiveLineIndex(0)
+  }, [selectedNoteId])
 
   const selectedNote = useMemo(
     () => notes.find((note) => note.id === selectedNoteId) ?? null,
@@ -852,6 +868,36 @@ export function Workspace() {
     [loadVault]
   )
 
+  const deleteNoteItem = useCallback(
+    async (targetPath: string) => {
+      try {
+        await window.electronAPI.deleteNoteItem(targetPath)
+        await loadVault()
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not delete this item.')
+        console.error(error)
+      }
+    },
+    [loadVault]
+  )
+
+  const deleteVaultItem = useCallback(
+    async (targetPath: string) => {
+      try {
+        const vaultPath = getCurrentVaultPath()
+        if (!vaultPath) {
+          return
+        }
+        await window.electronAPI.deleteVaultItem(joinPath(vaultPath, targetPath))
+        await loadVault()
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not delete this note.')
+        console.error(error)
+      }
+    },
+    [loadVault]
+  )
+
   const filteredNotes = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
     if (!query) {
@@ -866,7 +912,49 @@ export function Workspace() {
 
   const filteredNoteIds = useMemo(() => new Set(filteredNotes.map((note) => note.id)), [filteredNotes])
   const headings = useMemo(() => parseHeadings(editedContent), [editedContent])
-  const graph = useMemo(() => buildGraph(notes), [notes])
+  const activeHeadingIndex = useMemo(() => {
+    let currentIndex = -1
+    for (let index = 0; index < headings.length; index += 1) {
+      if (headings[index].lineIndex <= activeLineIndex) {
+        currentIndex = index
+      } else {
+        break
+      }
+    }
+    return currentIndex
+  }, [activeLineIndex, headings])
+  const graphSignature = useMemo(
+    () =>
+      JSON.stringify(
+        notes
+          .filter((note) => note.linkable)
+          .map((note) => ({
+            id: note.id,
+            title: note.title,
+            links: parseNoteLinks(note.content).sort()
+          }))
+      ),
+    [notes]
+  )
+  const graph = useMemo(() => buildGraph(notes), [graphSignature])
+
+  const handleGraphNodeClick = useCallback(
+    (id: string) => {
+      const note = notes.find((item) => item.id === id)
+      if (note) {
+        openNote(note)
+      }
+    },
+    [notes, openNote]
+  )
+
+  const handleGraphModalNodeClick = useCallback(
+    (id: string) => {
+      handleGraphNodeClick(id)
+      setShowGraphModal(false)
+    },
+    [handleGraphNodeClick]
+  )
 
   const expandedFolderMap = useMemo(
     () => new Map(folders.map((folder) => [folder.name, folder.expanded])),
@@ -975,24 +1063,44 @@ export function Workspace() {
                 void moveNoteToFolder(draggedNote, folderKey)
               }}
             >
-              <button
+              <div
+                className={`group flex w-full items-center justify-between rounded-lg px-2 py-2 transition-colors ${
+                  isDropTarget
+                    ? 'bg-[var(--nv-secondary-soft)] text-[var(--nv-foreground)]'
+                    : isSelectedFolder
+                    ? 'bg-[var(--nv-surface)] text-[var(--nv-foreground)]'
+                    : 'text-[var(--nv-secondary)] hover:bg-[var(--nv-surface)] hover:text-[var(--nv-foreground)]'
+                }`}
+                style={{ paddingLeft: `${depth * 14}px` }}
                 onClick={() => {
                   toggleTopLevelFolder(folderKey)
                   setSelectedFolderRelativePath(folderKey)
                 }}
-                className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium transition-colors ${
-                  isDropTarget
-                    ? 'bg-[rgba(255,183,125,0.14)] text-[#ffd4b1]'
-                    : isSelectedFolder
-                    ? 'bg-[#111111] text-[#ffcfaa]'
-                    : 'text-[#ffb77d] hover:bg-[#111111] hover:text-[#ffd4b1]'
-                }`}
-                style={{ paddingLeft: `${depth * 14}px` }}
               >
-                {folderOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                <Folder className="h-4 w-4" />
-                <span>{formatFolderLabel(node.name)}</span>
-              </button>
+                <div className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium">
+                  {folderOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                  <Folder className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{formatFolderLabel(node.name)}</span>
+                </div>
+                <div className="flex shrink-0 items-center pr-2">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setPendingDelete({
+                        kind: 'folder',
+                        label: formatFolderLabel(node.name),
+                        scope: 'notes',
+                        targetPath: folderKey
+                      })
+                    }}
+                    className="rounded-md p-1 text-[var(--nv-subtle)] opacity-0 transition-all hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)] group-hover:opacity-100"
+                    aria-label={`Delete folder ${formatFolderLabel(node.name)}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
               {folderOpen && node.children ? (
                 <div className="mt-1">{renderTreeNodes(node.children, depth + 1)}</div>
               ) : null}
@@ -1008,8 +1116,14 @@ export function Workspace() {
         const isActive = note.id === selectedNoteId
         const isDragging = note.id === draggedNoteId
         return [
-          <button
+          <div
             key={note.id}
+            className={`group flex w-full items-center justify-between rounded-xl px-3 py-2.5 transition-colors ${
+              isActive
+                ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
+                : 'text-[var(--nv-muted)] hover:bg-[var(--nv-surface)] hover:text-white'
+            } ${isDragging ? 'opacity-60' : ''}`}
+            style={{ marginLeft: `${depth * 14}px` }}
             onClick={() => openNote(note)}
             draggable
             onDragStart={(event) => {
@@ -1022,19 +1136,34 @@ export function Workspace() {
               setDraggedNoteId(null)
               setDropTargetFolderPath(null)
             }}
-            className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
-              isActive
-                ? 'bg-[rgba(255,86,37,0.12)] text-[#ff5625]'
-                : 'text-[#c8c2be] hover:bg-[#111111] hover:text-white'
-            } ${isDragging ? 'opacity-60' : ''}`}
-            style={{ marginLeft: `${depth * 14}px` }}
           >
-            <FileText className="h-4 w-4 shrink-0" />
-            <span className="truncate">{note.title}</span>
-          </button>
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm">
+              <FileText className="h-4 w-4 shrink-0" />
+              <span className="truncate">{note.title}</span>
+            </div>
+            <div className="flex shrink-0 items-center pr-2">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setPendingDelete({
+                    kind: 'note',
+                    label: note.title,
+                    scope: 'notes',
+                    targetPath: getNotesInnerPath(note.path)
+                  })
+                }}
+                className="rounded-md p-1 text-[var(--nv-subtle)] opacity-0 transition-all hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)] group-hover:opacity-100"
+                aria-label={`Delete note ${note.title}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
         ]
       }),
     [
+      setPendingDelete,
       draggedNoteId,
       dropTargetFolderPath,
       expandedFolderMap,
@@ -1051,41 +1180,41 @@ export function Workspace() {
     <>
       <Toaster richColors theme="dark" />
 
-      <div className="w-full h-full bg-[#0a0808]">
+      <div className="w-full h-full bg-[var(--nv-bg)]">
         <PanelGroup direction="horizontal">
           {showLeftPanel && (
             <>
-              <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-r border-[#2a2422] bg-[#0a0808]">
-                <div className="p-4">
+              <Panel defaultSize={17} minSize={12} maxSize={28} className="flex flex-col border-r border-[var(--nv-border)] bg-[var(--nv-bg)]">
+                <div className="p-2.5">
                   <div className="mb-4 flex gap-2">
                     <button
                       onClick={() => void createNote()}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[0.72rem] font-bold uppercase tracking-[0.18em] text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[0.72rem] font-bold uppercase tracking-[0.18em] text-[var(--nv-secondary)] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
                     >
                       <Plus className="h-4 w-4" />
                       <span>New Note</span>
                     </button>
                     <button
                       onClick={() => setShowCreateFolderModal(true)}
-                      className="flex items-center justify-center rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
+                      className="flex items-center justify-center rounded-xl bg-[rgba(255,183,125,0.1)] px-3 py-2 text-[var(--nv-secondary)] transition-colors hover:bg-[rgba(255,183,125,0.18)]"
                       title="New Folder"
                     >
                       <FolderPlus className="h-4 w-4" />
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2 rounded-xl border border-[#2a2422] bg-[#111111] px-3 py-2">
-                    <Search className="h-4 w-4 text-[#666666]" />
+                  <div className="flex items-center gap-2 rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)] px-3 py-2">
+                    <Search className="h-4 w-4 text-[var(--nv-subtle)]" />
                     <input
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
                       placeholder="Search notes..."
-                      className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[#555555]"
+                      className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[var(--nv-subtle)]"
                     />
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-3 py-4">
+                <div className="flex-1 overflow-y-auto px-2.5 py-3">
                   <div
                     className={`mb-3 space-y-1 rounded-xl transition-colors ${
                       draggedNoteId !== null && dropTargetFolderPath === ''
@@ -1127,7 +1256,7 @@ export function Workspace() {
                     <div className="mb-3">
                       <button
                         onClick={() => toggleTopLevelFolder(OUTSIDE_JUNK)}
-                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-[#ffb77d] transition-colors hover:bg-[#111111] hover:text-[#ffd4b1]"
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-[var(--nv-secondary)] transition-colors hover:bg-[var(--nv-surface)] hover:text-[var(--nv-foreground)]"
                       >
                         {outsideJunkFolder.expanded ? (
                           <ChevronDown className="h-4 w-4" />
@@ -1143,18 +1272,38 @@ export function Workspace() {
                           {visibleOutsideJunkNotes.map((note) => {
                             const isActive = note.id === selectedNoteId
                             return (
-                              <button
+                              <div
                                 key={note.id}
-                                onClick={() => openNote(note)}
-                                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
+                                className={`group flex w-full items-center justify-between rounded-xl px-3 py-2.5 transition-colors ${
                                   isActive
-                                    ? 'bg-[rgba(255,86,37,0.12)] text-[#ff5625]'
-                                    : 'text-[#c8c2be] hover:bg-[#111111] hover:text-white'
+                                    ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
+                                    : 'text-[var(--nv-muted)] hover:bg-[var(--nv-surface)] hover:text-white'
                                 }`}
+                                onClick={() => openNote(note)}
                               >
-                                <FileText className="h-4 w-4 shrink-0" />
-                                <span className="truncate">{note.title}</span>
-                              </button>
+                                <div className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm">
+                                  <FileText className="h-4 w-4 shrink-0" />
+                                  <span className="truncate">{note.title}</span>
+                                </div>
+                                <div className="flex shrink-0 items-center pr-2">
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      setPendingDelete({
+                                        kind: 'note',
+                                        label: note.title,
+                                        scope: 'vault',
+                                        targetPath: note.path
+                                      })
+                                    }}
+                                    className="rounded-md p-1 text-[var(--nv-subtle)] opacity-0 transition-all hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)] group-hover:opacity-100"
+                                    aria-label={`Delete note ${note.title}`}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </div>
                             )
                           })}
                         </div>
@@ -1163,10 +1312,10 @@ export function Workspace() {
                   )}
                 </div>
 
-                <div className="border-t border-[#1f1d1d] p-2">
+                <div className="border-t border-[var(--nv-border)] p-2">
                   <button
                     onClick={() => setShowLeftPanel(false)}
-                    className="rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                    className="rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
                     title="Close sidebar"
                   >
                     <PanelLeftClose className="h-4 w-4" />
@@ -1174,15 +1323,15 @@ export function Workspace() {
                 </div>
               </Panel>
 
-              <PanelResizeHandle className="w-px bg-[#1f1d1d] transition-colors hover:bg-[#ff5625]" />
+              <PanelResizeHandle className="w-px bg-[var(--nv-border)] transition-colors hover:bg-[var(--nv-primary)]" />
             </>
           )}
 
-          <Panel className="relative flex flex-col bg-[#0a0808]">
+          <Panel className="relative flex flex-col bg-[var(--nv-bg)]">
             {!showLeftPanel && (
               <button
                 onClick={() => setShowLeftPanel(true)}
-                className="absolute bottom-4 left-4 z-20 rounded-xl border border-[#1f1d1d] bg-[#0a0808] p-2 text-[#666666] shadow-lg transition-colors hover:text-white"
+                className="absolute bottom-4 left-4 z-20 rounded-xl border border-[var(--nv-border)] bg-[var(--nv-bg)] p-2 text-[var(--nv-subtle)] shadow-lg transition-colors hover:text-white"
               >
                 <PanelLeftOpen className="h-5 w-5" />
               </button>
@@ -1191,7 +1340,7 @@ export function Workspace() {
             {!showRightPanel && (
               <button
                 onClick={() => setShowRightPanel(true)}
-                className="absolute bottom-4 right-4 z-20 rounded-xl border border-[#1f1d1d] bg-[#0a0808] p-2 text-[#666666] shadow-lg transition-colors hover:text-white"
+                className="absolute bottom-4 right-4 z-20 rounded-xl border border-[var(--nv-border)] bg-[var(--nv-bg)] p-2 text-[var(--nv-subtle)] shadow-lg transition-colors hover:text-white"
               >
                 <PanelRightOpen className="h-5 w-5" />
               </button>
@@ -1199,18 +1348,18 @@ export function Workspace() {
 
             {selectedNote ? (
               <>
-                <header className="px-6 py-4">
+                <header className="px-3 py-2.5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <h1 className="text-xl font-bold text-[#ffb77d]">{selectedNote.title}</h1>
+                      <h1 className="text-xl font-bold text-[var(--nv-secondary)]">{selectedNote.title}</h1>
                     </div>
 
-                    <div className="text-right text-[0.62rem] font-bold uppercase tracking-[0.18em] text-[#777777]">
+                    <div className="text-right text-[0.62rem] font-bold uppercase tracking-[0.18em] text-[var(--nv-subtle)]">
                       <div>
                         {editedContent.length} chars · {editedContent.split(/\s+/).filter(Boolean).length} words · Recently opened
                       </div>
                       {isRecording && (
-                        <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#ff5449]/25 bg-[#ff5449]/10 px-3 py-1 text-[0.58rem] text-[#ff8a80]">
+                        <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[var(--nv-danger)] bg-[var(--nv-danger-soft)] px-3 py-1 text-[0.58rem] text-[var(--nv-danger)]">
                           <Square className="h-3.5 w-3.5 fill-current" />
                           Recording {recordingTime}s
                         </div>
@@ -1243,14 +1392,15 @@ export function Workspace() {
                       onChange={updateNoteContent}
                       onOpenNote={openNoteByTitle}
                       onImportAttachment={importAttachmentFile}
+                      onActiveLineChange={setActiveLineIndex}
                     />
                   </div>
                 </div>
               </>
             ) : (
-              <div className="flex flex-1 items-center justify-center text-[#666666]">
+              <div className="flex flex-1 items-center justify-center text-[var(--nv-subtle)]">
                 <div className="text-center">
-                  <FileText className="mx-auto mb-4 h-12 w-12 text-[#ff7043]/60" />
+                  <FileText className="mx-auto mb-4 h-12 w-12 text-[var(--nv-primary)] opacity-60" />
                   <p>Select a note or create a new one.</p>
                 </div>
               </div>
@@ -1259,16 +1409,16 @@ export function Workspace() {
 
           {showRightPanel && (
             <>
-              <PanelResizeHandle className="w-px bg-[#1f1d1d] transition-colors hover:bg-[#ff5625]" />
+              <PanelResizeHandle className="w-px bg-[var(--nv-border)] transition-colors hover:bg-[var(--nv-primary)]" />
 
-              <Panel defaultSize={22} minSize={16} maxSize={34} className="flex flex-col border-l border-[#2a2422] bg-[#0a0808]">
-                <div className="flex gap-2 p-4">
+              <Panel defaultSize={16} minSize={12} maxSize={24} className="flex flex-col border-l border-[var(--nv-border)] bg-[var(--nv-bg)]">
+                <div className="flex gap-2 p-2.5">
                   <button
                     onClick={() => setActiveRightTab('Outline')}
                     className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
                       activeRightTab === 'Outline'
-                        ? 'bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
-                        : 'text-[#666666] hover:bg-[#111111] hover:text-white'
+                        ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
+                        : 'text-[var(--nv-subtle)] hover:bg-[var(--nv-surface)] hover:text-white'
                     }`}
                   >
                     Outline
@@ -1277,30 +1427,45 @@ export function Workspace() {
                     onClick={() => setActiveRightTab('Graph')}
                     className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
                       activeRightTab === 'Graph'
-                        ? 'bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
-                        : 'text-[#666666] hover:bg-[#111111] hover:text-white'
+                        ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
+                        : 'text-[var(--nv-subtle)] hover:bg-[var(--nv-surface)] hover:text-white'
                     }`}
                   >
                     Graph
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4">
+                <div className="flex-1 overflow-y-auto px-2.5 py-3">
                   {activeRightTab === 'Outline' ? (
-                    <div className="space-y-2">
-                      <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[#ffb77d]">In this note</h3>
+                    <div className="space-y-3">
+                      <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[var(--nv-secondary)]">In this note</h3>
                       {headings.length > 0 ? (
-                        headings.map((heading, index) => (
-                          <div
-                            key={`${heading.lineIndex}-${index}`}
-                            className="truncate text-sm text-[#c8c2be]"
-                            style={{ paddingLeft: `${(heading.level - 1) * 12}px` }}
-                          >
-                            {heading.text}
-                          </div>
-                        ))
+                        <div className="border-l border-[var(--nv-border)] pl-3">
+                          {headings.map((heading, index) => (
+                            <button
+                              key={`${heading.lineIndex}-${index}`}
+                              type="button"
+                              onClick={() => editorRef.current?.scrollToLine(heading.lineIndex)}
+                              className={`relative block w-full truncate rounded-r-lg px-3 py-1.5 text-left text-sm transition-all ${
+                                index === activeHeadingIndex
+                                  ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-foreground)] ring-1 ring-[var(--nv-primary-soft-strong)]'
+                                  : 'text-[var(--nv-muted)] hover:bg-[var(--nv-surface)] hover:text-[var(--nv-foreground)]'
+                              }`}
+                              style={{
+                                marginLeft: `${(heading.level - 1) * 10}px`
+                              }}
+                            >
+                              {index === activeHeadingIndex ? (
+                                <span className="absolute inset-y-1 -left-3 w-0.5 rounded-full bg-[var(--nv-primary)] shadow-[0_0_10px_var(--nv-primary-glow)]" />
+                              ) : null}
+                              <span className={index === activeHeadingIndex ? 'font-semibold text-[var(--nv-primary)]' : ''}>
+                                {heading.text}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
                       ) : (
-                        <p className="text-xs text-[#555555]">No headings found.</p>
+                        <p className="text-xs text-[var(--nv-subtle)]">No headings found.</p>
                       )}
                     </div>
                   ) : graph.nodes.length > 0 ? (
@@ -1308,31 +1473,26 @@ export function Workspace() {
                       <GraphView
                         nodes={graph.nodes}
                         edges={graph.edges}
-                        onNodeClick={(id) => {
-                          const note = notes.find((item) => item.id === id)
-                          if (note) {
-                            openNote(note)
-                          }
-                        }}
+                        onNodeClick={handleGraphNodeClick}
                       />
                       <button
                         onClick={() => setShowGraphModal(true)}
-                        className="absolute right-2 top-2 rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                        className="absolute right-2 top-2 rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
                       >
                         <Maximize2 className="h-4 w-4" />
                       </button>
                     </div>
                   ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-[#666666]">
+                    <div className="flex h-full items-center justify-center text-sm text-[var(--nv-subtle)]">
                       Add linkable notes in `notes/` to build the graph.
                     </div>
                   )}
                 </div>
 
-                <div className="border-t border-[#1f1d1d] p-2">
+                <div className="border-t border-[var(--nv-border)] p-2">
                   <button
                     onClick={() => setShowRightPanel(false)}
-                    className="rounded-lg p-1.5 text-[#666666] transition-colors hover:bg-[rgba(255,86,37,0.1)] hover:text-[#ff5625]"
+                    className="rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
                   >
                     <PanelRightClose className="h-4 w-4" />
                   </button>
@@ -1350,22 +1510,46 @@ export function Workspace() {
           </div>
         )}
 
+        <DeleteConfirmDialog
+          open={pendingDelete !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPendingDelete(null)
+            }
+          }}
+          title={pendingDelete ? `Delete ${pendingDelete.kind} "${pendingDelete.label}"?` : 'Delete item?'}
+          description="This action removes the item from your vault and cannot be undone."
+          onConfirm={() => {
+            if (!pendingDelete) {
+              return
+            }
+
+            if (pendingDelete.scope === 'notes') {
+              void deleteNoteItem(pendingDelete.targetPath)
+            } else {
+              void deleteVaultItem(pendingDelete.targetPath)
+            }
+            setPendingDelete(null)
+          }}
+        />
+
         {showGraphModal && (
           <div
             className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm"
             onClick={() => setShowGraphModal(false)}
           >
             <div
-              className="flex h-[80vh] w-[85vw] flex-col overflow-hidden rounded-2xl border border-[#2a2422] bg-[#0a0808] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
+              className="flex h-[80vh] w-[85vw] flex-col overflow-hidden rounded-2xl border border-[var(--nv-border)] bg-[var(--nv-bg)] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-[#2a2422] px-6 py-4">
-                <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#ffb77d]">Graph View</h2>
+              <div className="flex items-center justify-between border-b border-[var(--nv-border)] px-6 py-4">
+                <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[var(--nv-secondary)]">Graph View</h2>
                 <button
                   onClick={() => setShowGraphModal(false)}
-                  className="text-lg text-[#666666] transition-colors hover:text-white"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-white"
+                  aria-label="Close graph view"
                 >
-                  X
+                  <X className="h-5 w-5" />
                 </button>
               </div>
 
@@ -1373,13 +1557,7 @@ export function Workspace() {
                 <GraphView
                   nodes={graph.nodes}
                   edges={graph.edges}
-                  onNodeClick={(id) => {
-                    const note = notes.find((item) => item.id === id)
-                    if (note) {
-                      openNote(note)
-                    }
-                    setShowGraphModal(false)
-                  }}
+                  onNodeClick={handleGraphModalNodeClick}
                 />
               </div>
             </div>
@@ -1395,11 +1573,11 @@ export function Workspace() {
             }}
           >
             <div
-              className="w-full max-w-md rounded-2xl border border-[#2a2422] bg-[#0a0808] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
+              className="w-full max-w-md rounded-2xl border border-[var(--nv-border)] bg-[var(--nv-bg)] shadow-[0_0_60px_rgba(255,86,37,0.15)]"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="border-b border-[#2a2422] px-6 py-4">
-                <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#ffb77d]">New Folder</h2>
+              <div className="border-b border-[var(--nv-border)] px-6 py-4">
+                <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[var(--nv-secondary)]">New Folder</h2>
               </div>
 
               <div className="px-6 py-5">
@@ -1419,24 +1597,24 @@ export function Workspace() {
                     }
                   }}
                   placeholder="Folder name"
-                  className="w-full rounded-xl border border-[#2a2422] bg-[#111111] px-4 py-3 text-sm text-white outline-none placeholder:text-[#555555]"
+                  className="w-full rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)] px-4 py-3 text-sm text-white outline-none placeholder:text-[var(--nv-subtle)]"
                 />
               </div>
 
-              <div className="flex justify-end gap-3 border-t border-[#2a2422] px-6 py-4">
+              <div className="flex justify-end gap-3 border-t border-[var(--nv-border)] px-6 py-4">
                 <button
                   onClick={() => {
                     setShowCreateFolderModal(false)
                     setNewFolderName('')
                   }}
-                  className="rounded-xl border border-[#2a2422] px-4 py-2 text-sm text-[#c8c2be] transition-colors hover:bg-[#111111] hover:text-white"
+                  className="rounded-xl border border-[var(--nv-border)] px-4 py-2 text-sm text-[var(--nv-muted)] transition-colors hover:bg-[var(--nv-surface)] hover:text-white"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => void createFolder(newFolderName)}
                   disabled={!newFolderName.trim()}
-                  className="rounded-xl bg-[rgba(255,183,125,0.1)] px-4 py-2 text-sm font-medium text-[#ffb77d] transition-colors hover:bg-[rgba(255,183,125,0.18)] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-xl bg-[rgba(255,183,125,0.1)] px-4 py-2 text-sm font-medium text-[var(--nv-secondary)] transition-colors hover:bg-[rgba(255,183,125,0.18)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Create
                 </button>
@@ -1447,11 +1625,11 @@ export function Workspace() {
 
         {contextMenu && (
           <div
-            className="fixed z-[260] min-w-[220px] overflow-hidden rounded-xl border border-[#2a2422] bg-[#141212] shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
+            className="fixed z-[260] min-w-[220px] overflow-hidden rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="border-b border-[#2a2422] px-4 py-2 text-[0.62rem] font-bold uppercase tracking-[0.22em] text-[#8c8079]">
+            <div className="border-b border-[var(--nv-border)] px-4 py-2 text-[0.62rem] font-bold uppercase tracking-[0.22em] text-[var(--nv-subtle)]">
               Editor Actions
             </div>
 
@@ -1464,12 +1642,12 @@ export function Workspace() {
                     item.action()
                     setContextMenu(null)
                   }}
-                  className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm text-[#ddd7d2] transition-colors hover:bg-[rgba(255,86,37,0.12)] hover:text-[#ffb77d]"
+                  className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm text-[var(--nv-foreground)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-secondary)]"
                 >
                   <span>{item.label}</span>
-                  {item.label === 'Attach File' && <Paperclip className="h-4 w-4 text-[#8c8079]" />}
-                  {item.label.includes('Record') && <Mic className="h-4 w-4 text-[#8c8079]" />}
-                  {item.label === 'Sketch Canvas' && <PenTool className="h-4 w-4 text-[#8c8079]" />}
+                  {item.label === 'Attach File' && <Paperclip className="h-4 w-4 text-[var(--nv-subtle)]" />}
+                  {item.label.includes('Record') && <Mic className="h-4 w-4 text-[var(--nv-subtle)]" />}
+                  {item.label === 'Sketch Canvas' && <PenTool className="h-4 w-4 text-[var(--nv-subtle)]" />}
                 </button>
               ))}
             </div>

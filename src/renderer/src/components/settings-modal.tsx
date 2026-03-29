@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Palette, SlidersHorizontal, Sparkles, Wand2, X } from 'lucide-react'
+import { Bot, CheckCircle2, Eye, EyeOff, Palette, SlidersHorizontal, Sparkles, Wand2, X } from 'lucide-react'
+import { toast } from 'sonner'
+
+import { useProfile } from '@/hooks/use-data'
+import {
+  DATABASE_ID,
+  USER_SETTINGS_COLLECTION_ID,
+  databases,
+  isAppwriteConfigured
+} from '@/lib/appwrite'
+import { useAuthStore } from '@/stores/authStore'
 
 import {
   applyVaultTheme,
@@ -29,6 +39,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
+  const [storedProfile, setStoredProfile] = useProfile()
+  const [geminiKey, setGeminiKey] = useState('')
+  const [showGeminiKey, setShowGeminiKey] = useState(false)
+  const [isSavingGeminiKey, setIsSavingGeminiKey] = useState(false)
+  const [geminiKeySaved, setGeminiKeySaved] = useState(false)
+  const currentUser = useAuthStore((state) => state.user)
 
   const activePalette = useMemo(() => getThemePreviewPalette(draftConfig), [draftConfig])
   const activeAccent = draftConfig.theme.customAccent ?? activePalette.primary
@@ -80,6 +96,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       cancelled = true
     }
   }, [isOpen])
+
+  useEffect(() => {
+    if (isOpen) {
+      setGeminiKey(storedProfile.geminiApiKey ?? '')
+      setGeminiKeySaved(false)
+    }
+  }, [isOpen, storedProfile.geminiApiKey])
 
   useEffect(() => {
     if (!isOpen || isLoading) {
@@ -402,6 +425,98 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       className="h-4 w-4 accent-[var(--nv-primary)]"
                     />
                   </label>
+                </div>
+              </section>
+
+              <section>
+                <div className="mb-3 flex items-center gap-2 text-[0.75rem] font-bold uppercase tracking-[0.2em] text-[var(--nv-secondary)]">
+                  <Bot className="h-4 w-4" />
+                  AI Integration
+                </div>
+                <div className="rounded-2xl border border-[var(--nv-border)] bg-[var(--nv-surface)] p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Groq API Key</p>
+                    <p className="mt-1 text-xs text-[var(--nv-muted)]">
+                      Used for AI-powered flashcard generation from your notes.
+                    </p>
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        id="gemini-api-key-input"
+                        type={showGeminiKey ? 'text' : 'password'}
+                        value={geminiKey}
+                        onChange={(event) => {
+                          setGeminiKey(event.target.value)
+                          setGeminiKeySaved(false)
+                        }}
+                        placeholder="Paste your Groq API key"
+                        className="h-10 w-full rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] px-3 pr-10 text-sm text-white placeholder-[var(--nv-muted)] outline-none transition-colors focus:border-[var(--nv-primary)]"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowGeminiKey((prev) => !prev)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-[var(--nv-muted)] transition-colors hover:text-white"
+                        aria-label={showGeminiKey ? 'Hide API key' : 'Show API key'}
+                      >
+                        {showGeminiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isSavingGeminiKey}
+                      onClick={async () => {
+                        setIsSavingGeminiKey(true)
+                        setGeminiKeySaved(false)
+                        try {
+                          setStoredProfile((prev) => ({
+                            ...prev,
+                            geminiApiKey: geminiKey.trim()
+                          }))
+
+                          if (isAppwriteConfigured() && currentUser) {
+                            try {
+                              await databases.updateDocument(
+                                DATABASE_ID,
+                                USER_SETTINGS_COLLECTION_ID,
+                                currentUser.$id,
+                                { gemini_api_key: geminiKey.trim() }
+                              )
+                            } catch {
+                              // Appwrite sync is best-effort; local save succeeded
+                            }
+                          }
+
+                          setGeminiKeySaved(true)
+                          toast.success('Groq API key saved.')
+                        } catch {
+                          toast.error('Could not save the API key.')
+                        } finally {
+                          setIsSavingGeminiKey(false)
+                        }
+                      }}
+                      className="h-10 shrink-0 rounded-xl border border-[var(--nv-border)] px-4 text-sm font-medium text-[var(--nv-muted)] transition-colors hover:border-[var(--nv-primary)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSavingGeminiKey ? 'Saving...' : geminiKeySaved ? '✓ Saved' : 'Save Key'}
+                    </button>
+                  </div>
+
+                  {!geminiKey.trim() && !geminiKeySaved ? (
+                    <p className="mt-3 text-xs text-[var(--nv-muted)]">
+                      Get your key at{' '}
+                      <a
+                        href="https://console.groq.com"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-[var(--nv-primary)] underline decoration-[var(--nv-primary)]/40 underline-offset-2 transition-colors hover:text-white"
+                      >
+                        console.groq.com
+                      </a>
+                    </p>
+                  ) : null}
                 </div>
               </section>
             </div>

@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { SettingsModal } from '../settings-modal'
 import { useState } from 'react'
-import { LoaderCircle, LogOut, Minus, RefreshCw, Settings, Square, X } from 'lucide-react'
+import { LogOut, Minus, RefreshCw, Settings, Square, X } from 'lucide-react'
 import { SyncModal } from '@/components/SyncModal'
 import { useAuthStore } from '@/stores/authStore'
 import { useSyncStore } from '@/stores/syncStore'
@@ -20,6 +20,14 @@ export function TopBar() {
   const [isSyncOpen, setIsSyncOpen] = useState(false)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const isSyncing = useSyncStore((state) => state.isSyncing)
+  const syncStatus = useSyncStore((state) => state.syncStatus)
+  const progress = useSyncStore((state) => state.progress)
+  const progressDetails = useSyncStore((state) => state.progressDetails)
+
+  const formatMegabytes = (bytes: number) => {
+    const mb = bytes / (1024 * 1024)
+    return `${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)} MB`
+  }
 
   return (
     <>
@@ -54,13 +62,51 @@ export function TopBar() {
         <div className="flex flex-row items-center h-full" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <div className="flex items-center gap-6 pr-6">
           {isAuthenticated && (
-            <button
-              onClick={() => setIsSyncOpen(true)}
-              className="text-[var(--nv-muted)] transition-colors hover:text-[var(--nv-secondary)]"
-              title="Sync Netherite"
-            >
-              {isSyncing ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <RefreshCw className="h-5 w-5" />}
-            </button>
+            <div className="group relative">
+              <button
+                onClick={() => setIsSyncOpen(true)}
+                className={`relative top-px inline-flex h-5 w-5 items-center justify-center text-[var(--nv-muted)] transition-colors hover:text-[var(--nv-secondary)] ${
+                  isSyncing ? 'text-[var(--nv-secondary)]' : ''
+                }`}
+                title={isSyncing ? 'Syncing... click to open progress' : 'Sync Netherite'}
+              >
+                <RefreshCw className={`h-[17px] w-[17px] ${isSyncing ? 'animate-spin' : ''}`} />
+              </button>
+
+              {isSyncing && (
+                <div className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden w-72 rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] p-3 text-left shadow-[0_12px_30px_rgba(0,0,0,0.35)] group-hover:block">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-[var(--nv-secondary)]">
+                      {syncStatus === 'uploading' ? 'Syncing' : 'Restoring'}
+                    </span>
+                    {progressDetails ? (
+                      <span className="text-xs text-[var(--nv-subtle)]">
+                        {Math.round(progressDetails.percent)}%
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 text-xs text-[var(--nv-muted)]">
+                    {progress || 'Sync in progress...'}
+                  </p>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--nv-surface)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--nv-primary)] transition-[width] duration-200"
+                      style={{ width: `${progressDetails?.percent ?? 28}%` }}
+                    />
+                  </div>
+                  {progressDetails ? (
+                    <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[var(--nv-subtle)]">
+                      <span>
+                        {formatMegabytes(progressDetails.currentBytes)} / {formatMegabytes(progressDetails.totalBytes)}
+                      </span>
+                      <span>Click to reopen</span>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-[11px] text-[var(--nv-subtle)]">Click to reopen</div>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           <button 
             onClick={() => setIsSettingsOpen(true)}

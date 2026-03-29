@@ -20,45 +20,47 @@ export function StatsOverview({
   streak,
 }: StatsOverviewProps) {
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-7 gap-4">
+    <div className="divide-y divide-[var(--nv-border)] border-y border-[var(--nv-border)]">
       <StatCard
         label="Today's Review"
         value={todayReview}
-        icon={<Clock className="w-5 h-5 text-[#ff5625]" />}
+        icon={<Clock className="w-5 h-5 text-[var(--nv-primary)]" />}
       />
       <StatCard
         label="New Cards"
         value={newCards}
-        icon={<Flame className="w-5 h-5 text-[#ff5449]" />}
+        icon={<Flame className="w-5 h-5 text-[var(--nv-danger)]" />}
       />
       <StatCard
         label="Learning"
         value={learningCards}
-        icon={<BookOpen className="w-5 h-5 text-[#ffb77d]" />}
+        icon={<BookOpen className="w-5 h-5 text-[var(--nv-secondary)]" />}
       />
       <StatCard
         label="Due Cards"
         value={dueCards}
-        icon={<Layers className="w-5 h-5 text-white" />}
+        icon={<Layers className="w-5 h-5 text-[var(--nv-foreground)]" />}
       />
       <StatCard
         label="Total Cards"
         value={totalCards}
-        icon={<GraduationCap className="w-5 h-5 text-[#a8a0a0]" />}
+        icon={<GraduationCap className="w-5 h-5 text-[var(--nv-muted)]" />}
       />
       <StatCard
         label="Mastered"
         value={mastered}
-        icon={<Award className="w-5 h-5 text-[#ffb77d]" />}
+        icon={<Award className="w-5 h-5 text-[var(--nv-secondary)]" />}
       />
       <StatCard
         label="Day Streak"
         value={streak}
-        icon={<Flame className="w-5 h-5 text-[#ff5625]" />}
+        icon={<Flame className="w-5 h-5 text-[var(--nv-primary)]" />}
       />
     </div>
   )
 }
+
+const getFontSize = (n: number) => (n >= 100 ? 'text-2xl' : n >= 10 ? 'text-3xl' : 'text-[2.65rem]')
 
 function StatCard({
   label,
@@ -70,13 +72,17 @@ function StatCard({
   icon: React.ReactNode
 }) {
   return (
-    <div className="rounded-[8px] border border-[#1f1d1d] bg-[#111111] p-6 flex flex-col justify-between relative overflow-hidden group hover:border-[#2a2422] transition-colors">
-      <div className="absolute right-4 top-4 opacity-30 group-hover:opacity-100 transition-opacity duration-300">
-        {icon}
+    <div className="flex items-center justify-between gap-6 py-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--nv-surface)]">
+          {icon}
+        </div>
+        <p className="text-[0.65rem] font-bold uppercase tracking-[0.24em] text-[var(--nv-subtle)]">
+          {label}
+        </p>
       </div>
-      <p className="text-4xl font-extrabold text-white mb-2 relative z-10">{value}</p>
-      <div className="flex items-center gap-2 relative z-10 mt-1">
-        <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] group-hover:text-[#a8a0a0] transition-colors">{label}</p>
+      <div className="shrink-0 text-right">
+        <p className={`${getFontSize(value)} font-extrabold leading-none text-[var(--nv-foreground)]`}>{value}</p>
       </div>
     </div>
   )

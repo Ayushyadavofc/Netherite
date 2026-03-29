@@ -103,7 +103,7 @@ export default function HabitsPage() {
               }
             }}
           >
-            <Star className={`w-3 h-3 ${i < count ? 'text-[#ff7043] fill-[#ff7043]' : 'text-[#444444]'}`} />
+            <Star className={`w-3 h-3 ${i < count ? 'fill-[var(--nv-primary)] text-[var(--nv-primary)]' : 'text-[var(--nv-subtle)]'}`} />
           </button>
         ))}
       </div>
@@ -111,17 +111,17 @@ export default function HabitsPage() {
   }
 
   return (
-    <div className="flex w-full min-h-screen bg-[#0a0808]">
-      <aside className="hidden lg:flex flex-col w-64 shrink-0 z-10 p-6 sticky top-16 h-[calc(100vh-64px)] border-r border-[#2a2422] bg-[#0a0808]">
+    <div className="flex w-full min-h-screen bg-[var(--nv-bg)]">
+      <aside className="hidden lg:flex flex-col w-64 shrink-0 z-10 p-6 sticky top-16 h-[calc(100vh-64px)] border-r border-[var(--nv-border)] bg-[var(--nv-bg)]">
         <div className="mb-8">
-          <h2 className="text-xs font-bold text-[#a8a0a0] uppercase tracking-widest">Ignite</h2>
+          <h2 className="text-xs font-bold text-[var(--nv-muted)] uppercase tracking-widest">Ignite</h2>
         </div>
         <nav className="flex flex-col gap-2">
-          <button className="flex items-center gap-3 px-4 py-3 text-sm font-semibold text-[#ff5625] bg-[rgba(255,86,37,0.1)] rounded-lg text-left transition-all">
+          <button className="flex items-center gap-3 px-4 py-3 text-sm font-semibold text-[var(--nv-primary)] bg-[var(--nv-primary-soft)] rounded-lg text-left transition-all">
             <Target className="h-5 w-5" />
             <span>All Habits</span>
           </button>
-          <button className="flex items-center gap-3 px-4 py-3 border border-transparent text-sm font-medium text-[#a8a0a0] hover:text-[#ffb77d] hover:bg-[#111111] transition-all rounded-lg text-left">
+          <button className="flex items-center gap-3 px-4 py-3 border border-transparent text-sm font-medium text-[var(--nv-muted)] hover:text-[var(--nv-secondary)] hover:bg-[var(--nv-surface)] transition-all rounded-lg text-left">
             <Flame className="h-5 w-5" />
             <span>Mastery</span>
           </button>
@@ -129,7 +129,7 @@ export default function HabitsPage() {
         <div className="mt-auto">
           <button 
             onClick={() => setIsAdding(true)}
-            className="w-full py-3 bg-[rgba(255,86,37,0.1)] text-[#ff5625] hover:bg-[rgba(255,86,37,0.2)] rounded-lg text-sm font-bold transition-all active:scale-95 uppercase tracking-widest"
+            className="w-full py-3 bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] hover:bg-[var(--nv-primary-soft-strong)] rounded-lg text-sm font-bold transition-all active:scale-95 uppercase tracking-widest"
           >
             New Habit
           </button>
@@ -140,8 +140,8 @@ export default function HabitsPage() {
         {/* Header */}
         <header className="flex items-start justify-between mb-8 w-full">
           <div>
-            <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[#444444] mb-1">Resets at midnight</p>
-            <h1 className="text-4xl font-extrabold text-[#ffb77d] font-headline">
+            <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-subtle)] mb-1">Resets at midnight</p>
+            <h1 className="text-4xl font-extrabold text-[var(--nv-secondary)] font-headline">
               Habits
             </h1>
           </div>
@@ -152,10 +152,10 @@ export default function HabitsPage() {
           
           {/* Add/Edit Form */}
           {isAdding && (
-            <div className="mb-8 p-6 bg-[#111111] border border-[#1f1d1d] rounded-[8px] relative">
+            <div className="mb-8 p-6 bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-[8px] relative">
               <button 
                 onClick={resetForm}
-                className="absolute top-4 right-4 text-[#666666] hover:text-white transition-colors bg-transparent border-none"
+                className="absolute top-4 right-4 text-[var(--nv-subtle)] hover:text-white transition-colors bg-transparent border-none"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -163,47 +163,47 @@ export default function HabitsPage() {
               
               <div className="space-y-6">
                 <div>
-                  <label className="block text-xs uppercase tracking-widest font-bold text-[#444444] mb-2">Title</label>
+                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-2">Title</label>
                   <input 
                     type="text" 
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder="e.g. Read 10 pages"
-                    className="w-full bg-[#0a0808] border border-[#1f1d1d] rounded px-4 py-3 text-white placeholder:text-[#444444] focus:outline-none focus:border-[#FF4500] transition-all text-sm"
+                    className="w-full bg-[var(--nv-bg)] border border-[var(--nv-border)] rounded px-4 py-3 text-white placeholder:text-[var(--nv-subtle)] focus:outline-none focus:border-[var(--nv-primary)] transition-all text-sm"
                     autoFocus
                   />
                 </div>
                 <div>
-                  <label className="block text-xs uppercase tracking-widest font-bold text-[#444444] mb-2">Description (Optional)</label>
+                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-2">Description (Optional)</label>
                   <input 
                     type="text" 
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="e.g. Before bed"
-                    className="w-full bg-[#0a0808] border border-[#1f1d1d] rounded px-4 py-3 text-white placeholder:text-[#444444] focus:outline-none focus:border-[#FF4500] transition-all text-sm"
+                    className="w-full bg-[var(--nv-bg)] border border-[var(--nv-border)] rounded px-4 py-3 text-white placeholder:text-[var(--nv-subtle)] focus:outline-none focus:border-[var(--nv-primary)] transition-all text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs uppercase tracking-widest font-bold text-[#444444] mb-3">Difficulty & Reward</label>
-                  <div className="flex items-center gap-4 bg-[#0a0808] p-4 rounded border border-[#1f1d1d] w-fit">
+                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-3">Difficulty & Reward</label>
+                  <div className="flex items-center gap-4 bg-[var(--nv-bg)] p-4 rounded border border-[var(--nv-border)] w-fit">
                     {renderStars(difficulty, true, setDifficulty)}
-                    <div className="w-px h-6 bg-[#1f1d1d]" />
-                    <span className="text-[0.6rem] font-bold text-[#444444] uppercase tracking-widest">
+                    <div className="w-px h-6 bg-[var(--nv-border)]" />
+                    <span className="text-[0.6rem] font-bold text-[var(--nv-subtle)] uppercase tracking-widest">
                       +{scrapRewardForDifficulty(difficulty)} SCRAPS
                     </span>
                   </div>
                 </div>
-                <div className="pt-4 flex justify-end gap-4 border-t border-[#1f1d1d]">
+                <div className="pt-4 flex justify-end gap-4 border-t border-[var(--nv-border)]">
                   <button 
                     onClick={resetForm}
-                    className="bg-transparent border border-[#1f1d1d] text-[#666666] hover:border-[#E63E00] hover:text-white px-6 py-2 rounded-[4px] font-medium text-sm transition-all"
+                    className="bg-transparent border border-[var(--nv-border)] text-[var(--nv-subtle)] hover:border-[var(--nv-primary)] hover:text-white px-6 py-2 rounded-[4px] font-medium text-sm transition-all"
                   >
                     Cancel
                   </button>
                   <button 
                     onClick={handleSave}
                     disabled={!title.trim()}
-                    className="bg-[rgba(255,86,37,0.1)] text-[#ff5625] hover:bg-[rgba(255,86,37,0.2)] disabled:opacity-50 px-6 py-2 rounded-lg font-bold text-sm transition-all uppercase tracking-widest"
+                    className="bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] hover:bg-[var(--nv-primary-soft-strong)] disabled:opacity-50 px-6 py-2 rounded-lg font-bold text-sm transition-all uppercase tracking-widest"
                   >
                     {editingId ? 'Save Changes' : 'Create Habit'}
                   </button>
@@ -220,8 +220,8 @@ export default function HabitsPage() {
                 return (
                   <div 
                     key={habit.id} 
-                    className={`group flex items-center justify-between p-6 bg-[#111111] border rounded-[8px] transition-all cursor-pointer hover:border-[#E63E00] hover:shadow-[0_0_20px_rgba(255,69,0,0.15)] ${
-                      isCompleted ? 'border-[#1f1d1d] opacity-40' : 'border-[#1f1d1d]'
+                    className={`group flex items-center justify-between p-6 bg-[var(--nv-surface)] border rounded-[8px] transition-all cursor-pointer hover:border-[var(--nv-primary)] hover:shadow-[0_0_20px_var(--nv-primary-glow)] ${
+                      isCompleted ? 'border-[var(--nv-border)] opacity-40' : 'border-[var(--nv-border)]'
                     }`}
                     onClick={() => toggleHabit(habit.id, habit.difficulty)}
                   >
@@ -229,8 +229,8 @@ export default function HabitsPage() {
                       {/* Custom Checkbox */}
                       <div className={`w-6 h-6 shrink-0 flex items-center justify-center transition-colors rounded-[2px] ${
                         isCompleted 
-                          ? 'bg-[#FF4500] border-[#FF4500]' 
-                          : 'border border-[#1f1d1d] group-hover:border-[#FF4500]'
+                          ? 'border-[var(--nv-primary)] bg-[var(--nv-primary)]' 
+                          : 'border border-[var(--nv-border)] group-hover:border-[var(--nv-primary)]'
                       }`}>
                         {isCompleted && <Check className="w-4 h-4 text-white font-bold" strokeWidth={3} />}
                       </div>
@@ -241,7 +241,7 @@ export default function HabitsPage() {
                           {habit.title}
                         </h3>
                         {habit.description && (
-                          <p className="text-xs text-[#666666] mt-1 truncate">
+                          <p className="text-xs text-[var(--nv-subtle)] mt-1 truncate">
                             {habit.description}
                           </p>
                         )}
@@ -254,20 +254,20 @@ export default function HabitsPage() {
                     {/* Right Side: Reward & Actions */}
                     <div className="flex items-center gap-6 shrink-0">
                       <div className="flex flex-col items-end justify-center h-full">
-                        <span className="text-[0.6rem] font-bold text-[#ffb77d] uppercase">+{scrapRewardForDifficulty(habit.difficulty)} 🔩</span>
+                        <span className="text-[0.6rem] font-bold text-[var(--nv-secondary)] uppercase">+{scrapRewardForDifficulty(habit.difficulty)} 🔩</span>
                       </div>
                       
                       {/* Hover Actions */}
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
                         <button 
                           onClick={(e) => { e.stopPropagation(); startEdit(habit); }}
-                          className="w-8 h-8 flex items-center justify-center bg-transparent border border-[#1f1d1d] text-[#666666] hover:border-[#E63E00] hover:text-white rounded-[4px] transition-colors"
+                          className="flex h-8 w-8 items-center justify-center rounded-[4px] border border-[var(--nv-border)] bg-transparent text-[var(--nv-subtle)] transition-colors hover:border-[var(--nv-primary)] hover:text-white"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button 
                           onClick={(e) => deleteHabit(habit.id, e)}
-                          className="w-8 h-8 flex items-center justify-center bg-transparent border border-[#1f1d1d] text-[#666666] hover:border-[#7f1d1d] hover:text-[#f87171] hover:bg-[rgba(127,29,29,0.15)] rounded-[4px] transition-colors"
+                          className="flex h-8 w-8 items-center justify-center rounded-[4px] border border-[var(--nv-border)] bg-transparent text-[var(--nv-subtle)] transition-colors hover:border-[var(--nv-danger)] hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)]"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -277,13 +277,13 @@ export default function HabitsPage() {
                 )
               })
             ) : (
-              <div className="text-center py-20 border border-dashed border-[#1f1d1d] bg-[#111111] rounded-[8px]">
-                <Flame className="w-12 h-12 text-[#ff5449] mx-auto mb-4" />
+              <div className="text-center py-20 border border-dashed border-[var(--nv-border)] bg-[var(--nv-surface)] rounded-[8px]">
+                <Flame className="w-12 h-12 text-[var(--nv-danger)] mx-auto mb-4" />
                 <h3 className="text-lg font-bold text-white mb-2">No habits yet</h3>
-                <p className="text-[#666666] text-sm mb-6 max-w-sm mx-auto">Create daily habits to earn scraps and unlock new items.</p>
+                <p className="text-[var(--nv-subtle)] text-sm mb-6 max-w-sm mx-auto">Create daily habits to earn scraps and unlock new items.</p>
                 <button 
                   onClick={() => setIsAdding(true)}
-                  className="bg-[rgba(255,86,37,0.1)] text-[#ff5625] hover:bg-[rgba(255,86,37,0.2)] px-6 py-2 rounded-lg font-bold text-sm transition-all uppercase tracking-widest"
+                  className="bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] hover:bg-[var(--nv-primary-soft-strong)] px-6 py-2 rounded-lg font-bold text-sm transition-all uppercase tracking-widest"
                 >
                   Create Your First Habit
                 </button>

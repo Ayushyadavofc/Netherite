@@ -35,6 +35,31 @@ type ZipSourceEntry = {
   size: number
 }
 
+const ZIP_STORE_EXTENSIONS = new Set([
+  '.7z',
+  '.avi',
+  '.avif',
+  '.gif',
+  '.gz',
+  '.jpeg',
+  '.jpg',
+  '.m4a',
+  '.mkv',
+  '.mov',
+  '.mp3',
+  '.mp4',
+  '.pdf',
+  '.png',
+  '.rar',
+  '.svgz',
+  '.wav',
+  '.webm',
+  '.webp',
+  '.zip'
+])
+
+const shouldStoreZipEntry = (filePath: string) => ZIP_STORE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+
 function getMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
   switch (ext) {
@@ -285,7 +310,10 @@ async function createZipArchive(
     archive.pipe(output)
 
     for (const entry of entries) {
-      archive.file(entry.filePath, { name: entry.archivePath })
+      archive.file(entry.filePath, {
+        name: entry.archivePath,
+        store: shouldStoreZipEntry(entry.filePath)
+      })
     }
 
     void archive.finalize()
@@ -842,6 +870,21 @@ async function updateVaultSyncMetaForPath(vaultPath: string, filePath: string, t
 
 async function removeVaultSyncMetaForPath(vaultPath: string, relativePath: string) {
   return removeSyncMetaEntries(getVaultSyncMetaPath(vaultPath), [relativePath.replace(/\\/g, '/')])
+}
+
+async function removeVaultSyncMetaForPrefix(vaultPath: string, relativePath: string) {
+  const metaPath = getVaultSyncMetaPath(vaultPath)
+  const currentMeta = await readSyncMetaFile(metaPath)
+  const normalizedPath = relativePath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const entryKeys = Object.keys(currentMeta).filter(
+    (entryKey) => entryKey === normalizedPath || entryKey.startsWith(`${normalizedPath}/`)
+  )
+
+  if (entryKeys.length === 0) {
+    return currentMeta
+  }
+
+  return removeSyncMetaEntries(metaPath, entryKeys)
 }
 
 async function renameVaultSyncMetaEntries(vaultPath: string, oldRelativePath: string, newRelativePath: string) {
@@ -1477,6 +1520,49 @@ ipcMain.handle('renameNoteItem', async (_event, oldPath: string, newPath: string
   return safeNewPath
 })
 
+ipcMain.handle('deleteNoteItem', async (_event, targetPath: string) => {
+  assertVaultWritable()
+  if (!currentVaultPath) {
+    throw new Error('Vault not selected')
+  }
+
+  const notesRootPath = getVaultNotesPath(currentVaultPath)
+  const safeTargetPath = await resolveExistingNotePath(notesRootPath, targetPath)
+  const stats = await fs.promises.stat(safeTargetPath)
+  const relativePath = normalizeVaultRelativePath(currentVaultPath, safeTargetPath)
+
+  await fs.promises.rm(safeTargetPath, { recursive: true, force: true })
+
+  if (stats.isDirectory()) {
+    await removeVaultSyncMetaForPrefix(currentVaultPath, relativePath)
+  } else {
+    await removeVaultSyncMetaForPath(currentVaultPath, relativePath)
+  }
+
+  return true
+})
+
+ipcMain.handle('deleteVaultItem', async (_event, targetPath: string) => {
+  assertVaultWritable()
+  if (!currentVaultPath) {
+    throw new Error('Vault not selected')
+  }
+
+  const safeTargetPath = await resolvePathWithinVault(targetPath)
+  const stats = await fs.promises.stat(safeTargetPath)
+  const relativePath = normalizeVaultRelativePath(currentVaultPath, safeTargetPath)
+
+  await fs.promises.rm(safeTargetPath, { recursive: true, force: true })
+
+  if (stats.isDirectory()) {
+    await removeVaultSyncMetaForPrefix(currentVaultPath, relativePath)
+  } else {
+    await removeVaultSyncMetaForPath(currentVaultPath, relativePath)
+  }
+
+  return true
+})
+
 /** Open native file-select dialog for images/media */
 ipcMain.handle('selectFile', async (_event, filters?: { name: string; extensions: string[] }[]) => {
   const result = await dialog.showOpenDialog({
@@ -1546,6 +1632,241 @@ ipcMain.handle('cloneVault', async (_event, sourcePath: string, userId: string) 
 
 
 // ── Window controls ───────────────────────────────────
+// ── Gemini AI Flashcard Generation ────────────────────
+
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_FLASHCARD_MODEL = 'llama-3.3-70b-versatile'
+const GROQ_FLASHCARD_MAX_TOKENS = 1024
+const FLASHCARD_RETRY_DELAY_MS = 60_000
+
+function countFlashcardWords(content: string): number {
+  const trimmed = content.trim()
+  return trimmed ? trimmed.split(/\s+/).length : 0
+}
+
+function targetCardsForWordCount(wordCount: number): number {
+  return Math.max(3, Math.ceil(wordCount / 100))
+}
+
+function buildGeminiPrompt(notes: { name: string; content: string }[]): string {
+  const notesSerialized = notes
+    .map((n, i) => {
+      const wordCount = countFlashcardWords(n.content)
+      const targetCards = targetCardsForWordCount(wordCount)
+      return `--- Note ${i + 1}: ${n.name} ---
+Word count: ${wordCount}
+Required flashcards: ${targetCards}
+${n.content}`
+    })
+    .join('\n\n')
+
+  return `You are a flashcard generator. For each note below, generate exactly the required number of flashcards listed in that note header.
+
+Each flashcard must have a "front" (question or prompt) and a "back" (answer or explanation).
+Use terms and phrasing directly from the note content whenever possible.
+If a note already contains short Q&A-style content, reuse it as the flashcard front/back instead of rewriting it.
+The required flashcard count is at least 3 per note and at least 1 card per 100 words. Follow the required count strictly for every note.
+Return ONLY a raw JSON array with no extra text, no markdown fences, and no explanation. The format must be exactly:
+[{ "front": "...", "back": "..." }]
+
+Here are the notes:
+
+${notesSerialized}`
+}
+
+function stripGeminiCodeFences(text: string): string {
+  let cleaned = text.trim()
+  cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, '')
+  cleaned = cleaned.replace(/\n?```\s*$/i, '')
+  return cleaned.trim()
+}
+
+function extractJsonArrayCandidate(text: string): string {
+  const cleaned = stripGeminiCodeFences(text)
+  const firstBracket = cleaned.indexOf('[')
+  const lastBracket = cleaned.lastIndexOf(']')
+  if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+    return cleaned.slice(firstBracket, lastBracket + 1)
+  }
+  return cleaned
+}
+
+function decodePossiblyBrokenJsonString(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`)
+  } catch {
+    try {
+      return JSON.parse(
+        `"${value
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/\r/g, '\\r')
+          .replace(/\n/g, '\\n')
+          .replace(/\t/g, '\\t')}"`
+      )
+    } catch {
+      return value.replace(/\s+/g, ' ').trim()
+    }
+  }
+}
+
+function parseFlashcardArrayFromText(text: string): { front: string; back: string }[] {
+  const candidate = extractJsonArrayCandidate(text)
+
+  try {
+    const parsed: unknown = JSON.parse(candidate)
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (card: unknown): card is { front: string; back: string } =>
+          typeof card === 'object' &&
+          card !== null &&
+          typeof (card as { front?: unknown }).front === 'string' &&
+          typeof (card as { back?: unknown }).back === 'string'
+      )
+    }
+  } catch {
+    // Fall through to relaxed parsing for malformed JSON strings from the model.
+  }
+
+  const relaxedPattern =
+    /"front"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"back"\s*:\s*"((?:\\.|[^"\\])*)"/g
+  const relaxedCards: { front: string; back: string }[] = []
+  let match: RegExpExecArray | null
+
+  while ((match = relaxedPattern.exec(candidate)) !== null) {
+    relaxedCards.push({
+      front: decodePossiblyBrokenJsonString(match[1] ?? ''),
+      back: decodePossiblyBrokenJsonString(match[2] ?? '')
+    })
+  }
+
+  return relaxedCards
+}
+
+function shouldRetryWithDelay(status: number, message: string | null): boolean {
+  if (status === 429) {
+    return true
+  }
+
+  const normalized = message?.toLowerCase() ?? ''
+  return (
+    normalized.includes('rate limit') ||
+    normalized.includes('too many requests') ||
+    normalized.includes('too many pending') ||
+    normalized.includes('please try again') ||
+    normalized.includes('capacity')
+  )
+}
+
+function parseGeminiErrorMessage(rawResponseText: string): string | null {
+  try {
+    const parsed = JSON.parse(rawResponseText)
+    const message = parsed?.error?.message
+    return typeof message === 'string' && message.trim() ? message.trim() : null
+  } catch {
+    return null
+  }
+}
+
+async function generateGeminiChunk(
+  notes: { name: string; content: string }[],
+  apiKey: string
+): Promise<{ front: string; back: string }[]> {
+  const prompt = buildGeminiPrompt(notes)
+  console.log('API key length:', apiKey?.length)
+  console.log('Using Groq model:', GROQ_FLASHCARD_MODEL)
+  console.log('Sending chunk with notes:', notes.map(n => n.name))
+
+  let lastError: Error | null = null
+  const maxRetries = 2
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+        console.log(`Retry attempt ${attempt} in ${Math.round(delay)}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+
+      const response = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: GROQ_FLASHCARD_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.4,
+          max_tokens: GROQ_FLASHCARD_MAX_TOKENS
+        })
+      })
+
+      const rawResponseText = await response.text()
+
+      if (!response.ok) {
+        const apiMessage = parseGeminiErrorMessage(rawResponseText)
+        if (attempt < maxRetries && shouldRetryWithDelay(response.status, apiMessage)) {
+          console.warn(`Groq asked us to slow down. Waiting ${FLASHCARD_RETRY_DELAY_MS / 1000}s before retrying...`)
+          await new Promise((resolve) => setTimeout(resolve, FLASHCARD_RETRY_DELAY_MS))
+          continue
+        }
+        const errorMsg = apiMessage
+          ? `Groq API error: ${response.status} ${response.statusText} - ${apiMessage}`
+          : `Groq API error: ${response.status} ${response.statusText}`
+        console.error(errorMsg)
+        throw new Error(errorMsg)
+      }
+
+      const data = JSON.parse(rawResponseText)
+      const rawText: string | undefined = data?.choices?.[0]?.message?.content
+
+      if (!rawText) {
+        throw new Error('Groq returned no text content')
+      }
+
+      const parsed = parseFlashcardArrayFromText(rawText)
+      if (parsed.length === 0) {
+        throw new Error('AI response could not be parsed into flashcards')
+      }
+
+      return parsed
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      if (
+        (lastError.message.includes('fetch') ||
+          lastError.message.toLowerCase().includes('network')) &&
+        attempt < maxRetries
+      ) {
+        continue
+      }
+      console.error('Failed to generate or parse flashcard chunk. Full error object:', lastError)
+      throw lastError
+    }
+  }
+
+  throw lastError
+}
+
+ipcMain.handle(
+  'ai:generate',
+  async (
+    _event,
+    payload: {
+      notes: { name: string; content: string }[]
+      apiKey: string
+    }
+  ) => {
+    const { notes, apiKey } = payload
+    if (!notes || notes.length === 0 || !apiKey.trim()) {
+      return []
+    }
+
+    // The frontend already prepares word-limited note chunks, so process the payload directly.
+    return await generateGeminiChunk(notes, apiKey)
+  }
+)
+
 ipcMain.on('window-minimize', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.minimize()
 })

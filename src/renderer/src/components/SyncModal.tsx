@@ -123,10 +123,12 @@ export function SyncModal({ isOpen, onClose }: SyncModalProps) {
       <DialogContent className="flex h-auto max-h-[88vh] w-[min(92vw,48rem)] max-w-[48rem] flex-col overflow-hidden border-[var(--nv-border)] bg-[var(--nv-surface-strong)] p-0 text-[var(--nv-foreground)]">
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="border-b border-[var(--nv-border)] px-6 py-5">
-            <DialogTitle className="text-lg font-bold text-[var(--nv-secondary)]">Sync Netherite</DialogTitle>
-            <DialogDescription className="mt-2 text-[var(--nv-muted)]">
-              Upload account data and keep each vault stored as its own cloud entry.
-            </DialogDescription>
+            <div className="min-w-0">
+              <DialogTitle className="text-lg font-bold text-[var(--nv-secondary)]">Sync Netherite</DialogTitle>
+              <DialogDescription className="mt-2 text-[var(--nv-muted)]">
+                Upload account data and keep each vault stored as its own cloud entry.
+              </DialogDescription>
+            </div>
           </div>
 
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-6 pt-5">

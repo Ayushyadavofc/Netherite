@@ -909,11 +909,12 @@ export default function LandingPage() {
                   const vaultUpdateLabel = formatVaultUpdateLabel(vault)
 
                   return (
-                    <div key={vault.id} className="group flex w-full items-center justify-between p-4 transition-colors hover:bg-[var(--nv-surface)]">
-                      <button
-                        onClick={() => openRecentVault(vault)}
-                        className="mr-4 flex flex-1 cursor-pointer items-center justify-between text-left"
-                      >
+                    <div
+                      key={vault.id}
+                      className="group flex w-full cursor-pointer items-center justify-between p-4 transition-colors hover:bg-[var(--nv-surface)]"
+                      onClick={() => openRecentVault(vault)}
+                    >
+                      <div className="mr-4 flex flex-1 items-center justify-between text-left">
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-[var(--nv-foreground)]">{vault.name}</p>
                           <p className="truncate text-sm text-[var(--nv-muted)]">
@@ -928,9 +929,10 @@ export default function LandingPage() {
                         <div className="flex shrink-0 items-center gap-3">
                           <span className="text-xs text-[var(--nv-subtle)]">{formatTimeAgo(vault.lastOpened)}</span>
                         </div>
-                      </button>
+                      </div>
                       <button
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.stopPropagation()
                           removeDeviceVaultPath(vault.vaultId)
                           void persistVaults(vaults.filter((item) => item.id !== vault.id))
                         }}
