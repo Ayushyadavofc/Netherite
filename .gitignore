@@ -37,6 +37,7 @@ tsc-web-errors.txt
 *.dump
 recover.py
 ObsidianMarkdownEditor.original.tsx
+fix.js
 
 # Local databases and app data
 *.db
