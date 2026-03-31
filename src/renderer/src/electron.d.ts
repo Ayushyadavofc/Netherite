@@ -1,3 +1,5 @@
+import type { RuntimeAppConfig } from '../../shared/runtime-config'
+
 export interface ElectronFsNode {
   name: string
   type: 'file' | 'folder'
@@ -15,6 +17,7 @@ export interface ElectronSyncProgressPayload {
 }
 
 export interface ElectronAPI {
+  runtimeConfig: RuntimeAppConfig
   readAccountFile: <T = unknown>(userId: string, filename: string) => Promise<T | null>
   writeAccountFile: <T = unknown>(userId: string, filename: string, data: T) => Promise<T>
   migrateGuestData: (userId: string) => Promise<boolean>

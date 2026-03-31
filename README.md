@@ -38,6 +38,12 @@ Create a production build:
 npm run build
 ```
 
+Create a Windows installer:
+
+```bash
+npm run dist:win
+```
+
 ## Project Structure
 
 ```text
@@ -52,7 +58,8 @@ public/       static assets
 
 - This export is prepared for GitHub upload.
 - It intentionally excludes local build output, `node_modules`, and workspace-only reference folders.
-- Auth/backend work is not included here.
+- Appwrite-backed cloud features can read from a local runtime config file at `%APPDATA%/Netherite/runtime-config.json`.
+- If the installer is built with `VITE_APPWRITE_*` values present, the app seeds that runtime config automatically on first launch.
 
 ## Status
 

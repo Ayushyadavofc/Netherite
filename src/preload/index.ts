@@ -1,6 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { createEmptyRuntimeConfig, type RuntimeAppConfig } from '../shared/runtime-config'
+
+const runtimeConfig = (() => {
+  try {
+    return ipcRenderer.sendSync('app:getRuntimeConfigSync') as RuntimeAppConfig
+  } catch {
+    return createEmptyRuntimeConfig()
+  }
+})()
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  runtimeConfig,
   // Account data: lets the signed-in renderer load and persist per-user JSON files.
   readAccountFile: <T = unknown>(userId: string, filename: string) =>
     ipcRenderer.invoke('readAccountFile', userId, filename) as Promise<T | null>,

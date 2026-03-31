@@ -9,6 +9,13 @@ import archiver from 'archiver'
 import * as unzipper from 'unzipper'
 
 import { buildVaultSnapshotFileName } from '../shared/snapshot-files'
+import {
+  APPWRITE_CONFIG_KEYS,
+  createEmptyRuntimeConfig,
+  normalizeRuntimeConfig,
+  RUNTIME_CONFIG_FILE_NAME,
+  type RuntimeAppConfig
+} from '../shared/runtime-config'
 
 const ALLOWED_SCHEMES = ['https:', 'http:']
 let currentVaultPath: string | null = null
@@ -131,6 +138,68 @@ const getVaultFlashcardsPath = (vaultPath: string) => path.join(getVaultMetaPath
 const getVaultAiPatternsPath = (vaultPath: string) => path.join(getVaultMetaPath(vaultPath), 'ai-patterns.json')
 const getVaultNotesPath = (vaultPath: string) => path.join(vaultPath, 'notes')
 const getVaultSyncMetaPath = (vaultPath: string) => path.join(getVaultMetaPath(vaultPath), 'sync-meta.json')
+const getRuntimeConfigPath = () => join(app.getPath('userData'), RUNTIME_CONFIG_FILE_NAME)
+
+const readBuildTimeConfigValue = (key: (typeof APPWRITE_CONFIG_KEYS)[number]) => {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
+  return env[key]?.trim() ?? process.env[key]?.trim() ?? ''
+}
+
+const getBuildTimeRuntimeConfig = (): RuntimeAppConfig => {
+  const config = createEmptyRuntimeConfig()
+
+  for (const key of APPWRITE_CONFIG_KEYS) {
+    config[key] = readBuildTimeConfigValue(key)
+  }
+
+  return config
+}
+
+const mergeRuntimeConfig = (
+  fileConfig: RuntimeAppConfig,
+  fallbackConfig: RuntimeAppConfig
+): RuntimeAppConfig => {
+  const merged = createEmptyRuntimeConfig()
+
+  for (const key of APPWRITE_CONFIG_KEYS) {
+    merged[key] = fileConfig[key] || fallbackConfig[key] || ''
+  }
+
+  return merged
+}
+
+const readRuntimeConfig = () => {
+  const runtimeConfigPath = getRuntimeConfigPath()
+  const fallbackConfig = getBuildTimeRuntimeConfig()
+
+  let fileConfig = createEmptyRuntimeConfig()
+
+  try {
+    if (fs.existsSync(runtimeConfigPath)) {
+      fileConfig = normalizeRuntimeConfig(JSON.parse(fs.readFileSync(runtimeConfigPath, 'utf-8')))
+    }
+  } catch (error) {
+    console.warn('Failed to read runtime config, falling back to build-time values:', error)
+  }
+
+  const mergedConfig = mergeRuntimeConfig(fileConfig, fallbackConfig)
+
+  try {
+    const currentContent = fs.existsSync(runtimeConfigPath)
+      ? fs.readFileSync(runtimeConfigPath, 'utf-8')
+      : null
+    const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`
+
+    if (currentContent !== nextContent) {
+      fs.mkdirSync(path.dirname(runtimeConfigPath), { recursive: true })
+      fs.writeFileSync(runtimeConfigPath, nextContent, 'utf-8')
+    }
+  } catch (error) {
+    console.warn('Failed to persist runtime config:', error)
+  }
+
+  return mergedConfig
+}
 
 type SyncMetaMap = Record<string, string>
 
@@ -1212,6 +1281,10 @@ function createWindow(): void {
 // ── IPC Handlers ──────────────────────────────────────
 
 /** Open native folder-select dialog, returns the selected path or null */
+ipcMain.on('app:getRuntimeConfigSync', (event) => {
+  event.returnValue = readRuntimeConfig()
+})
+
 ipcMain.handle('selectFolder', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory']
