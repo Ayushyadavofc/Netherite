@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Flame, Check, Plus, Trash2, Edit2, X, Star, Target } from 'lucide-react'
 import { useHabits, Habit, updateScraps, scrapRewardForDifficulty } from '@/hooks/use-data'
 import { getLocalToday } from '@/lib/date'
+import { emitPreChaosAppEvent } from '@/prechaos/app-events'
 
 export default function HabitsPage() {
   const [habits, setHabits] = useHabits()
@@ -14,6 +15,15 @@ export default function HabitsPage() {
 
   const todayStr = getLocalToday()
 
+  useEffect(() => {
+    emitPreChaosAppEvent({
+      source: 'habits',
+      action: 'habit_viewed',
+      label: 'Opened the habits workspace',
+      importance: 'medium'
+    })
+  }, [])
+
   const handleSave = () => {
     if (!title.trim()) return
 
@@ -23,6 +33,12 @@ export default function HabitsPage() {
           ? { ...h, title, description, difficulty } 
           : h
       ))
+      emitPreChaosAppEvent({
+        source: 'habits',
+        action: 'habit_updated',
+        label: 'Updated a habit',
+        importance: 'medium'
+      })
     } else {
       const newHabit: Habit = {
         id: crypto.randomUUID(),
@@ -33,6 +49,12 @@ export default function HabitsPage() {
         createdAt: Date.now()
       }
       setHabits(prev => [...prev, newHabit])
+      emitPreChaosAppEvent({
+        source: 'habits',
+        action: 'habit_created',
+        label: 'Created a new habit',
+        importance: 'medium'
+      })
     }
 
     resetForm()
@@ -68,6 +90,12 @@ export default function HabitsPage() {
           return { ...h, completedDates: h.completedDates.filter(d => d !== todayStr) }
         } else {
           updateScraps(scrapRewardForDifficulty(diff))
+          emitPreChaosAppEvent({
+            source: 'habits',
+            action: 'habit_checked',
+            label: 'Completed a habit check-in',
+            importance: 'high'
+          })
           return { ...h, completedDates: [...h.completedDates, todayStr] }
         }
       }

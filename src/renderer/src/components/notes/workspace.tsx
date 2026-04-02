@@ -12,6 +12,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Paperclip,
+  Pencil,
   PenTool,
   Plus,
   Search,
@@ -35,6 +36,8 @@ import {
   resolveAttachmentKind,
   type AttachmentItem
 } from '@/lib/attachments'
+import { emitPreChaosAppEvent } from '@/prechaos/app-events'
+import { usePreChaosStore } from '@/prechaos/store'
 
 interface FsNode {
   name: string
@@ -65,6 +68,15 @@ interface FolderRecord {
 interface ContextMenuState {
   x: number
   y: number
+}
+
+interface SidebarContextMenuState {
+  x: number
+  y: number
+  kind: 'note' | 'folder'
+  targetPath: string
+  label: string
+  noteId?: string
 }
 
 interface PendingDeleteState {
@@ -266,7 +278,7 @@ export function Workspace() {
   const [selectedFolderRelativePath, setSelectedFolderRelativePath] = useState('')
   const [editedContent, setEditedContent] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [activeRightTab, setActiveRightTab] = useState<'Outline' | 'Graph'>('Outline')
+  const [activeRightTab, setActiveRightTab] = useState<'Outline' | 'Graph' | 'AI'>('Outline')
   const [showLeftPanel, setShowLeftPanel] = useState(true)
   const [showRightPanel, setShowRightPanel] = useState(true)
   const [showGraphModal, setShowGraphModal] = useState(false)
@@ -280,6 +292,13 @@ export function Workspace() {
   const [recordingTime, setRecordingTime] = useState(0)
   const [activeLineIndex, setActiveLineIndex] = useState(0)
   const [pendingDelete, setPendingDelete] = useState<PendingDeleteState | null>(null)
+  const [renamingItemPath, setRenamingItemPath] = useState<string | null>(null)
+  const [renamingItemValue, setRenamingItemValue] = useState('')
+  const [sidebarContextMenu, setSidebarContextMenu] = useState<SidebarContextMenuState | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [editingTitleValue, setEditingTitleValue] = useState('')
+  const [showNoteStatsPanel, setShowNoteStatsPanel] = useState(true)
+  const appContext = usePreChaosStore((state) => state.appContext)
 
   const saveTimerRef = useRef<number | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
@@ -297,6 +316,7 @@ export function Workspace() {
 
   useEffect(() => {
     setActiveLineIndex(0)
+    setEditingTitle(false)
   }, [selectedNoteId])
 
   const selectedNote = useMemo(
@@ -334,6 +354,31 @@ export function Workspace() {
 
   const linkableNotes = useMemo(() => notes.filter((note) => note.linkable), [notes])
   const linkableNoteTitles = useMemo(() => linkableNotes.map((note) => note.title), [linkableNotes])
+  const noteTelemetryCards = useMemo(
+    () => [
+      {
+        label: 'Typing Speed',
+        value: `${appContext.typing_speed.toFixed(2)} keys/s`,
+        helper: appContext.focused_editable ? 'Live editor rhythm' : 'Focus the editor to record'
+      },
+      {
+        label: 'Avg Pause',
+        value: `${appContext.pause_time.toFixed(2)}s`,
+        helper: 'Between recent keystrokes'
+      },
+      {
+        label: 'Backspaces',
+        value: String(appContext.backspace_count),
+        helper: 'Current sampling window'
+      },
+      {
+        label: 'Rhythm Drift',
+        value: appContext.typing_variation.toFixed(2),
+        helper: 'Pause variation'
+      }
+    ],
+    [appContext.backspace_count, appContext.focused_editable, appContext.pause_time, appContext.typing_speed, appContext.typing_variation]
+  )
 
   const loadVault = useCallback(
     async (preferredNotePath?: string | null, preferredFolderRelativePath?: string | null) => {
@@ -541,6 +586,16 @@ export function Workspace() {
   const saveNote = useCallback(async (note: NoteRecord, content: string) => {
     try {
       await window.electronAPI.writeFile(note.fullPath, content)
+      emitPreChaosAppEvent({
+        source: 'notes',
+        action: 'note_saved',
+        label: `Saved note ${note.title}`,
+        importance: 'high',
+        metadata: {
+          bytes: new Blob([content]).size,
+          words: content.trim() ? content.trim().split(/\s+/).length : 0
+        }
+      })
       setNotes((currentNotes) =>
         currentNotes.map((item) =>
           item.id === note.id ? { ...item, content, updatedAt: 'Just now' } : item
@@ -572,6 +627,15 @@ export function Workspace() {
         return
       }
 
+      emitPreChaosAppEvent({
+        source: 'notes',
+        action: 'note_keystroke',
+        label: `Typing in ${selectedNote.title}`,
+        importance: 'low',
+        metadata: {
+          chars: content.length
+        }
+      })
       scheduleSave(selectedNote, content)
     },
     [scheduleSave, selectedNote]
@@ -597,6 +661,12 @@ export function Workspace() {
     }
 
     lastOpenedNoteIdRef.current = note.id
+    emitPreChaosAppEvent({
+      source: 'notes',
+      action: 'note_opened',
+      label: `Opened note ${note.title}`,
+      importance: 'low'
+    })
     const openedAt = getDisplayDate()
     setNotes((current) => current.map((item) => (item.id === note.id ? { ...item, openedAt } : item)))
   }, [])
@@ -799,12 +869,70 @@ export function Workspace() {
 
     try {
       await window.electronAPI.writeFile(fullPath, content)
+      emitPreChaosAppEvent({
+        source: 'notes',
+        action: 'note_created',
+        label: 'Created a new note',
+        importance: 'medium'
+      })
       await loadVault(fullPath, folderPath)
     } catch (error) {
       toast.error('Save failed, your changes may not have been written to disk.')
       console.error(error)
     }
   }, [loadVault, notes])
+
+  const renameNote = useCallback(
+    async (note: NoteRecord, newTitle: string) => {
+      const vaultPath = getCurrentVaultPath()
+      if (!vaultPath || !note.linkable) return
+      const trimmed = newTitle.trim()
+      if (!trimmed || trimmed === note.title) return
+
+      const safeName = slugifyBaseName(trimmed)
+      const currentInnerPath = normalizePath(getNotesInnerPath(note.path))
+      const parentFolder = getParentRelativePath(currentInnerPath)
+      const newRelativePath = parentFolder ? `${parentFolder}/${safeName}.md` : `${safeName}.md`
+      const newFullPath = joinPath(vaultPath, `notes/${newRelativePath}`)
+
+      try {
+        if (await window.electronAPI.fileExists(newFullPath)) {
+          toast.error('A note with that name already exists.')
+          return
+        }
+        await window.electronAPI.renameNoteItem(currentInnerPath, newRelativePath)
+        await loadVault(newFullPath, parentFolder)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not rename this note.')
+        console.error(error)
+      }
+    },
+    [loadVault]
+  )
+
+  const renameFolder = useCallback(
+    async (folderRelativePath: string, newName: string) => {
+      const vaultPath = getCurrentVaultPath()
+      if (!vaultPath) return
+      const trimmed = newName.trim()
+      if (!trimmed) return
+
+      const safeName = slugifyBaseName(trimmed)
+      const parentFolder = getParentRelativePath(folderRelativePath)
+      const newRelativePath = parentFolder ? `${parentFolder}/${safeName}` : safeName
+
+      if (newRelativePath === folderRelativePath) return
+
+      try {
+        await window.electronAPI.renameNoteItem(folderRelativePath, newRelativePath)
+        await loadVault(undefined, newRelativePath)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not rename this folder.')
+        console.error(error)
+      }
+    },
+    [loadVault]
+  )
 
   const createFolder = useCallback(async (folderNameValue: string) => {
     const vaultPath = getCurrentVaultPath()
@@ -822,6 +950,12 @@ export function Workspace() {
 
     try {
       await window.electronAPI.createNoteFolder(vaultPath, folderRelativePath)
+      emitPreChaosAppEvent({
+        source: 'notes',
+        action: 'folder_created',
+        label: 'Created a notes folder',
+        importance: 'medium'
+      })
       await loadVault(undefined, folderRelativePath)
       setShowCreateFolderModal(false)
       setNewFolderName('')
@@ -956,6 +1090,66 @@ export function Workspace() {
     [handleGraphNodeClick]
   )
 
+  const outlinePanelContent = (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[var(--nv-secondary)]">In this note</h3>
+        <p className="mt-1 text-xs text-[var(--nv-subtle)]">
+          {selectedNote ? `Jump through ${selectedNote.title}` : 'Select a note to inspect its outline.'}
+        </p>
+      </div>
+      {headings.length > 0 ? (
+        <div className="border-l border-[var(--nv-border)] pl-3">
+          {headings.map((heading, index) => (
+            <button
+              key={`${heading.lineIndex}-${index}`}
+              type="button"
+              onClick={() => editorRef.current?.scrollToLine(heading.lineIndex)}
+              className={`relative block w-full truncate rounded-r-lg px-3 py-1.5 text-left text-sm transition-all ${
+                index === activeHeadingIndex
+                  ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-foreground)] ring-1 ring-[var(--nv-primary-soft-strong)]'
+                  : 'text-[var(--nv-muted)] hover:bg-[var(--nv-surface)] hover:text-[var(--nv-foreground)]'
+              }`}
+              style={{
+                marginLeft: `${(heading.level - 1) * 10}px`
+              }}
+            >
+              {index === activeHeadingIndex ? (
+                <span className="absolute inset-y-1 -left-3 w-0.5 rounded-full bg-[var(--nv-primary)] shadow-[0_0_10px_var(--nv-primary-glow)]" />
+              ) : null}
+              <span className={index === activeHeadingIndex ? 'font-semibold text-[var(--nv-primary)]' : ''}>
+                {heading.text}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--nv-subtle)]">{selectedNote ? 'No headings found.' : 'Open a note to populate this outline.'}</p>
+      )}
+    </div>
+  )
+
+  const graphPanelContent =
+    graph.nodes.length > 0 ? (
+      <div className="relative h-full min-h-[340px]">
+        <GraphView
+          nodes={graph.nodes}
+          edges={graph.edges}
+          onNodeClick={handleGraphNodeClick}
+        />
+        <button
+          onClick={() => setShowGraphModal(true)}
+          className="absolute right-2 top-2 rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
+        >
+          <Maximize2 className="h-4 w-4" />
+        </button>
+      </div>
+    ) : (
+      <div className="flex h-full min-h-[340px] items-center justify-center text-sm text-[var(--nv-subtle)]">
+        Add linkable notes in `notes/` to build the graph.
+      </div>
+    )
+
   const expandedFolderMap = useMemo(
     () => new Map(folders.map((folder) => [folder.name, folder.expanded])),
     [folders]
@@ -1077,10 +1271,46 @@ export function Workspace() {
                   setSelectedFolderRelativePath(folderKey)
                 }}
               >
-                <div className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium">
+                <div
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium"
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setSidebarContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      kind: 'folder',
+                      targetPath: folderKey,
+                      label: formatFolderLabel(node.name)
+                    })
+                  }}
+                >
                   {folderOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
                   <Folder className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{formatFolderLabel(node.name)}</span>
+                  {renamingItemPath === folderKey ? (
+                    <input
+                      autoFocus
+                      className="min-w-0 flex-1 rounded bg-[var(--nv-surface)] px-1.5 py-0.5 text-sm text-[var(--nv-foreground)] outline-none ring-1 ring-[var(--nv-primary)]"
+                      value={renamingItemValue}
+                      onChange={(e) => setRenamingItemValue(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === 'Enter') {
+                          void renameFolder(folderKey, renamingItemValue)
+                          setRenamingItemPath(null)
+                        } else if (e.key === 'Escape') {
+                          setRenamingItemPath(null)
+                        }
+                      }}
+                      onBlur={() => {
+                        void renameFolder(folderKey, renamingItemValue)
+                        setRenamingItemPath(null)
+                      }}
+                    />
+                  ) : (
+                    <span className="truncate">{formatFolderLabel(node.name)}</span>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center pr-2">
                   <button
@@ -1137,9 +1367,46 @@ export function Workspace() {
               setDropTargetFolderPath(null)
             }}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm">
+            <div
+              className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
+              onContextMenu={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setSidebarContextMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                  kind: 'note',
+                  targetPath: getNotesInnerPath(note.path),
+                  label: note.title,
+                  noteId: note.id
+                })
+              }}
+            >
               <FileText className="h-4 w-4 shrink-0" />
-              <span className="truncate">{note.title}</span>
+              {renamingItemPath === getNotesInnerPath(note.path) ? (
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 rounded bg-[var(--nv-surface)] px-1.5 py-0.5 text-sm text-[var(--nv-foreground)] outline-none ring-1 ring-[var(--nv-primary)]"
+                  value={renamingItemValue}
+                  onChange={(e) => setRenamingItemValue(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Enter') {
+                      void renameNote(note, renamingItemValue)
+                      setRenamingItemPath(null)
+                    } else if (e.key === 'Escape') {
+                      setRenamingItemPath(null)
+                    }
+                  }}
+                  onBlur={() => {
+                    void renameNote(note, renamingItemValue)
+                    setRenamingItemPath(null)
+                  }}
+                />
+              ) : (
+                <span className="truncate">{note.title}</span>
+              )}
             </div>
             <div className="flex shrink-0 items-center pr-2">
               <button
@@ -1171,6 +1438,10 @@ export function Workspace() {
       moveNoteToFolder,
       notes,
       openNote,
+      renameNote,
+      renameFolder,
+      renamingItemPath,
+      renamingItemValue,
       selectedFolderRelativePath,
       selectedNoteId
     ]
@@ -1350,11 +1621,42 @@ export function Workspace() {
               <>
                 <header className="px-3 py-2.5">
                   <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h1 className="text-xl font-bold text-[var(--nv-secondary)]">{selectedNote.title}</h1>
+                    <div className="min-w-0 flex-1">
+                      {editingTitle ? (
+                        <input
+                          autoFocus
+                          className="w-full rounded bg-transparent text-xl font-bold text-[var(--nv-secondary)] outline-none ring-1 ring-[var(--nv-primary)] px-1"
+                          value={editingTitleValue}
+                          onChange={(e) => setEditingTitleValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              void renameNote(selectedNote, editingTitleValue)
+                              setEditingTitle(false)
+                            } else if (e.key === 'Escape') {
+                              setEditingTitle(false)
+                            }
+                          }}
+                          onBlur={() => {
+                            void renameNote(selectedNote, editingTitleValue)
+                            setEditingTitle(false)
+                          }}
+                        />
+                      ) : (
+                        <h1
+                          className="cursor-text truncate text-xl font-bold text-[var(--nv-secondary)] hover:opacity-80 transition-opacity"
+                          onClick={() => {
+                            setEditingTitleValue(selectedNote.title)
+                            setEditingTitle(true)
+                          }}
+                          title="Click to rename"
+                        >
+                          {selectedNote.title}
+                        </h1>
+                      )}
                     </div>
 
-                    <div className="text-right text-[0.62rem] font-bold uppercase tracking-[0.18em] text-[var(--nv-subtle)]">
+                    <div className="text-right text-[0.62rem] font-bold uppercase tracking-[0.18em] text-[var(--nv-subtle)] shrink-0">
                       <div>
                         {editedContent.length} chars · {editedContent.split(/\s+/).filter(Boolean).length} words · Recently opened
                       </div>
@@ -1433,69 +1735,95 @@ export function Workspace() {
                   >
                     Graph
                   </button>
+                  <button
+                    onClick={() => setActiveRightTab('AI')}
+                    className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${
+                      activeRightTab === 'AI'
+                        ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
+                        : 'text-[var(--nv-subtle)] hover:bg-[var(--nv-surface)] hover:text-white'
+                    }`}
+                  >
+                    AI
+                  </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-2.5 py-3">
                   {activeRightTab === 'Outline' ? (
+                    outlinePanelContent
+                  ) : activeRightTab === 'Graph' ? (
+                    graphPanelContent
+                  ) : showNoteStatsPanel ? (
                     <div className="space-y-3">
-                      <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[var(--nv-secondary)]">In this note</h3>
-                      {headings.length > 0 ? (
-                        <div className="border-l border-[var(--nv-border)] pl-3">
-                          {headings.map((heading, index) => (
-                            <button
-                              key={`${heading.lineIndex}-${index}`}
-                              type="button"
-                              onClick={() => editorRef.current?.scrollToLine(heading.lineIndex)}
-                              className={`relative block w-full truncate rounded-r-lg px-3 py-1.5 text-left text-sm transition-all ${
-                                index === activeHeadingIndex
-                                  ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-foreground)] ring-1 ring-[var(--nv-primary-soft-strong)]'
-                                  : 'text-[var(--nv-muted)] hover:bg-[var(--nv-surface)] hover:text-[var(--nv-foreground)]'
-                              }`}
-                              style={{
-                                marginLeft: `${(heading.level - 1) * 10}px`
-                              }}
-                            >
-                              {index === activeHeadingIndex ? (
-                                <span className="absolute inset-y-1 -left-3 w-0.5 rounded-full bg-[var(--nv-primary)] shadow-[0_0_10px_var(--nv-primary-glow)]" />
-                              ) : null}
-                              <span className={index === activeHeadingIndex ? 'font-semibold text-[var(--nv-primary)]' : ''}>
-                                {heading.text}
-                              </span>
-                            </button>
-                          ))}
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[var(--nv-secondary)]">Live Note Stats</h3>
+                          <p className="mt-1 text-xs text-[var(--nv-subtle)]">
+                            {appContext.productive_context
+                              ? 'Collector is recording this note session.'
+                              : 'Focus the editor to start collecting note behavior.'}
+                          </p>
                         </div>
-                      ) : (
-                        <p className="text-xs text-[var(--nv-subtle)]">No headings found.</p>
-                      )}
-                    </div>
-                  ) : graph.nodes.length > 0 ? (
-                    <div className="relative h-full min-h-[300px]">
-                      <GraphView
-                        nodes={graph.nodes}
-                        edges={graph.edges}
-                        onNodeClick={handleGraphNodeClick}
-                      />
-                      <button
-                        onClick={() => setShowGraphModal(true)}
-                        className="absolute right-2 top-2 rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
-                      >
-                        <Maximize2 className="h-4 w-4" />
-                      </button>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`rounded-full px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.18em] ${
+                              appContext.productive_context
+                                ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
+                                : 'bg-[var(--nv-surface-strong)] text-[var(--nv-subtle)]'
+                            }`}
+                          >
+                            {appContext.productive_context ? 'Live' : 'Idle'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        {[
+                          ...noteTelemetryCards,
+                          {
+                            label: 'Saves / Min',
+                            value: String(appContext.note_saves),
+                            helper: 'Recent save frequency'
+                          },
+                          {
+                            label: 'Activity / Min',
+                            value: String(appContext.note_activity),
+                            helper: 'Meaningful note actions'
+                          }
+                        ].map((metric) => (
+                          <div
+                            key={metric.label}
+                            className="flex items-start justify-between gap-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-[0.8rem] font-semibold text-[var(--nv-foreground)]">{metric.label}</p>
+                              <p className="mt-0.5 text-xs text-[var(--nv-subtle)]">{metric.helper}</p>
+                            </div>
+                            <p className="shrink-0 text-sm font-semibold text-[var(--nv-primary)]">{metric.value}</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-[var(--nv-subtle)]">
-                      Add linkable notes in `notes/` to build the graph.
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowNoteStatsPanel(true)}
+                      className="inline-flex w-full items-center justify-between rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface)] px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--nv-subtle)] transition-colors hover:border-[var(--nv-primary)] hover:text-[var(--nv-foreground)]"
+                    >
+                      <span>Show Live Note Stats</span>
+                      <PanelRightOpen className="h-3.5 w-3.5" />
+                    </button>
                   )}
                 </div>
 
-                <div className="border-t border-[var(--nv-border)] p-2">
-                  <button
-                    onClick={() => setShowRightPanel(false)}
-                    className="rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
-                  >
-                    <PanelRightClose className="h-4 w-4" />
-                  </button>
+                <div className="border-t border-[var(--nv-border)] px-2.5 py-3">
+                  <div className="flex items-center justify-end">
+                    <button
+                      onClick={() => setShowRightPanel(false)}
+                      className="rounded-lg p-1.5 text-[var(--nv-subtle)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-primary)]"
+                    >
+                      <PanelRightClose className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
               </Panel>
             </>
@@ -1652,6 +1980,52 @@ export function Workspace() {
               ))}
             </div>
           </div>
+        )}
+
+        {sidebarContextMenu && (
+          <>
+            <div
+              className="fixed inset-0 z-[259]"
+              onClick={() => setSidebarContextMenu(null)}
+            />
+            <div
+              className="fixed z-[260] min-w-[180px] overflow-hidden rounded-xl border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
+              style={{ left: sidebarContextMenu.x, top: sidebarContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="border-b border-[var(--nv-border)] px-4 py-2 text-[0.62rem] font-bold uppercase tracking-[0.22em] text-[var(--nv-subtle)]">
+                {sidebarContextMenu.kind === 'note' ? 'Note' : 'Folder'}
+              </div>
+              <div className="py-1">
+                <button
+                  onClick={() => {
+                    setRenamingItemPath(sidebarContextMenu.targetPath)
+                    setRenamingItemValue(sidebarContextMenu.label)
+                    setSidebarContextMenu(null)
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--nv-foreground)] transition-colors hover:bg-[var(--nv-primary-soft)] hover:text-[var(--nv-secondary)]"
+                >
+                  <Pencil className="h-3.5 w-3.5 text-[var(--nv-subtle)]" />
+                  Rename
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingDelete({
+                      kind: sidebarContextMenu.kind,
+                      label: sidebarContextMenu.label,
+                      scope: 'notes',
+                      targetPath: sidebarContextMenu.targetPath
+                    })
+                    setSidebarContextMenu(null)
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--nv-foreground)] transition-colors hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)]"
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-[var(--nv-subtle)]" />
+                  Delete
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </div>
     </>

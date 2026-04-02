@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { PixelCharacter } from '@/components/dashboard/PixelCharacter'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
-import { Flame, CheckSquare, BookOpen, Zap, ShoppingBag, Sparkles, Sword, Heart, Wand2, Brain } from 'lucide-react'
+import { Flame, CheckSquare, BookOpen, ShoppingBag, Sword, Heart, Wand2, Brain } from 'lucide-react'
 import { useProfile, useScraps, useStreak, useTodos, useHabits } from '@/hooks/use-data'
 import { formatLocalDate, getLocalToday } from '@/lib/date'
 import { defaultVaultConfig, getCurrentVaultPath, loadVaultConfig } from '@/lib/vault-config'
+import { DashboardRiskWidget } from '@/prechaos/DashboardRiskWidget'
 
 const nextUnlocks = [
   { name: "Shadow Gi", price: 250, rarity: "Rare", color: "#4a6fa5" },
@@ -246,26 +247,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Focus Meter */}
-          <div className="relative flex max-h-[280px] flex-col overflow-hidden rounded-lg border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 transition-colors hover:border-[var(--nv-primary)]">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[var(--nv-surface-strong)] rounded-lg flex items-center justify-center">
-                <Zap className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Focus Meter</h3>
-              </div>
-            </div>
-            <div className="flex-1 flex flex-col justify-end gap-3">
-              <div className="h-2 bg-[var(--nv-bg)] border border-[var(--nv-border)] rounded-full overflow-hidden">
-                <div className="h-full w-[0%] bg-gradient-to-r from-[var(--nv-danger)] via-[var(--nv-primary)] to-[var(--nv-secondary)] rounded-full" />
-              </div>
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-3 h-3 text-[var(--nv-subtle)]" />
-                <span className="text-[0.6rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)]">Coming Soon</span>
-              </div>
-            </div>
-          </div>
+          <DashboardRiskWidget />
 
         </div>
       </main>
@@ -290,23 +272,46 @@ export default function DashboardPage() {
             </div>
 
             {/* Character Stats */}
-            <div className="flex flex-col gap-2 pt-2 min-w-[90px]">
+            <div className="flex min-w-[118px] flex-col gap-3.5 pt-2">
               {characterStats.map((stat) => {
                 const StatIcon = stat.icon
                 const pct = Math.min(100, (stat.value / stat.max) * 100)
                 return (
-                  <div key={stat.name} className="flex flex-col gap-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <StatIcon className="w-3 h-3" style={{ color: stat.color }} />
-                      <span className="text-[0.5rem] font-bold uppercase tracking-wider text-[var(--nv-muted)]">{stat.name}</span>
-                      <span className="text-[0.5rem] font-bold ml-auto" style={{ color: stat.color }}>{stat.value}</span>
-                    </div>
-                    <div className="h-1 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-full overflow-hidden">
+                  <div
+                    key={stat.name}
+                    className="border border-[var(--nv-border)] bg-[rgba(18,14,14,0.92)] px-2.5 py-2 shadow-[0_0_16px_rgba(0,0,0,0.2)]"
+                  >
+                    <div className="mb-1.5 flex items-center gap-2">
                       <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{ width: `${pct}%`, backgroundColor: stat.color, boxShadow: `0 0 4px ${stat.color}40` }}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center border border-[var(--nv-border)] bg-black/35"
+                        style={{ boxShadow: `0 0 10px ${stat.color}25` }}
+                      >
+                        <StatIcon className="h-3 w-3" style={{ color: stat.color }} />
+                      </div>
+                      <span className="text-[0.58rem] font-black uppercase tracking-[0.24em] text-[var(--nv-foreground)]">
+                        {stat.name}
+                      </span>
+                      <span
+                        className="ml-auto text-[0.65rem] font-black"
+                        style={{ color: stat.color, textShadow: `0 0 10px ${stat.color}55` }}
+                      >
+                        {stat.value}
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden border border-[var(--nv-border)] bg-[var(--nv-surface-strong)]">
+                      <div
+                        className="h-full transition-all duration-500"
+                        style={{
+                          width: `${pct}%`,
+                          backgroundColor: stat.color,
+                          backgroundImage: `repeating-linear-gradient(90deg, ${stat.color} 0 9px, rgba(255,255,255,0.18) 9px 10px)`,
+                          boxShadow: `0 0 10px ${stat.color}80`
+                        }}
                       />
                     </div>
+                    <p className="mt-1.5 text-[0.5rem] font-bold uppercase tracking-[0.22em] text-[var(--nv-secondary)]/90">
+                      {stat.label}
+                    </p>
                   </div>
                 )
               })}

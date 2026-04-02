@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { HashRouter, Routes, Route } from 'react-router-dom'
+import { HashRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 import { MainLayout } from './components/layout/MainLayout'
 import LandingPage from './pages/LandingPage'
@@ -8,11 +8,15 @@ import NotesPage from './pages/NotesPage'
 import FlashcardsPage from './pages/FlashcardsPage'
 import HabitsPage from './pages/HabitsPage'
 import TodosPage from './pages/TodosPage'
+import AnalyticsPage from './pages/AnalyticsPage'
 
 import { SplashScreen } from './components/SplashScreen'
 import { applyVaultTheme, getCachedVaultConfig, loadVaultConfig } from './lib/vault-config'
 import { useAuthStore } from './stores/authStore'
 import { useSyncStore } from './stores/syncStore'
+import { CameraModuleStateSync } from './prechaos/CameraModuleStateSync'
+import CameraModuleWindowPage from './prechaos/CameraModuleWindowPage'
+import { usePreChaosRuntime } from './prechaos/usePreChaosRuntime'
 
 function VaultThemeSync() {
   const isAuthLoading = useAuthStore((state) => state.isLoading)
@@ -85,16 +89,23 @@ function VaultServerSyncInit() {
   return null
 }
 
-export default function App() {
+function AppContent() {
+  const location = useLocation()
+  const isCameraModuleRoute = location.pathname === '/camera-module'
+  const userId = useAuthStore((state) => state.user?.$id ?? 'guest')
+  usePreChaosRuntime({ userId, enabled: !isCameraModuleRoute })
+
   return (
-    <HashRouter>
+    <>
       <VaultThemeSync />
       <AuthInit />
-      <VaultServerSyncInit />
-      <SplashScreen />
-      <div className="flex flex-col h-screen">
-        <div className="flex-1 overflow-hidden">
+      {!isCameraModuleRoute && <VaultServerSyncInit />}
+      {!isCameraModuleRoute && <SplashScreen />}
+      {!isCameraModuleRoute && <CameraModuleStateSync />}
+      <div className="flex h-screen min-h-0 flex-col">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <Routes>
+            <Route path="/camera-module" element={<CameraModuleWindowPage />} />
             <Route path="/" element={<LandingPage />} />
             <Route element={<MainLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
@@ -102,10 +113,19 @@ export default function App() {
               <Route path="/flashcards" element={<FlashcardsPage />} />
               <Route path="/habits" element={<HabitsPage />} />
               <Route path="/todos" element={<TodosPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
             </Route>
           </Routes>
         </div>
       </div>
+    </>
+  )
+}
+
+export default function App() {
+  return (
+    <HashRouter>
+      <AppContent />
     </HashRouter>
   )
 }

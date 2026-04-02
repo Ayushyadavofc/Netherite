@@ -11,7 +11,8 @@ const navItems = [
   { href: '/notes', label: 'Notes' },
   { href: '/flashcards', label: 'Flashcards' },
   { href: '/habits', label: 'Habits' },
-  { href: '/todos', label: 'To-Do' }
+  { href: '/todos', label: 'To-Do' },
+  { href: '/analytics', label: 'AI Analytics' }
 ]
 
 export function TopBar() {

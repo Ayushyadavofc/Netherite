@@ -1,20 +1,30 @@
 import { useEffect, useState } from 'react'
 
+const SPLASH_DURATION = 1800
+
 export function SplashScreen() {
   const [show, setShow] = useState(true)
+  const isDev = window.location.protocol === 'http:' || window.location.protocol === 'https:'
 
   useEffect(() => {
+    if (isDev) {
+      const timer = window.setTimeout(() => {
+        setShow(false)
+      }, SPLASH_DURATION)
+      return () => window.clearTimeout(timer)
+    }
+
     const hasShown = sessionStorage.getItem('splashShown')
     if (hasShown) {
       setShow(false)
-    } else {
-      sessionStorage.setItem('splashShown', 'true')
-      const timer = setTimeout(() => {
-        setShow(false)
-      }, 1800)
-      return () => clearTimeout(timer)
+      return
     }
-  }, [])
+    sessionStorage.setItem('splashShown', 'true')
+    const timer = window.setTimeout(() => {
+      setShow(false)
+    }, SPLASH_DURATION)
+    return () => window.clearTimeout(timer)
+  }, [isDev])
 
   if (!show) return null
 

@@ -478,6 +478,8 @@ export function updateScraps(amount: number) {
 
 export function scrapRewardForDifficulty(stars: number): number {
   switch (stars) {
+    case 0:
+      return 0
     case 5:
       return 55
     case 4:

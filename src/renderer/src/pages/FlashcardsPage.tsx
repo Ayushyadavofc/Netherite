@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, ChevronRight, Link2, Play, Settings, Sparkles, Trash2, Shuffle, X } from 'lucide-react'
 import { ReviewCard } from '@/components/flashcards/review-card'
 import { StatsOverview } from '@/components/flashcards/stats-overview'
@@ -7,6 +7,7 @@ import { GenerateFlashcardsModal } from '@/components/flashcards/GenerateFlashca
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { extractMarkdownPreviewText } from '@/components/shared/MarkdownContent'
 import { detectAttachmentKind, normalizePath, type AttachmentItem } from '@/lib/attachments'
+import { emitPreChaosAppEvent } from '@/prechaos/app-events'
 import { Toaster, toast } from 'sonner'
 
 export type CardState = 'new' | 'learning' | 'review' | 'relearning'
@@ -336,6 +337,25 @@ export default function FlashcardsPage() {
 
   const [showRemoveCard, setShowRemoveCard] = useState(false)
   const [showGenerateModal, setShowGenerateModal] = useState(false)
+  const hasMountedStudyStateRef = useRef(false)
+
+  useEffect(() => {
+    if (!hasMountedStudyStateRef.current) {
+      hasMountedStudyStateRef.current = true
+      return
+    }
+
+    if (isStudying) {
+      return
+    }
+
+    emitPreChaosAppEvent({
+      source: 'flashcards',
+      action: 'flashcard_session_ended',
+      label: 'Flashcard review session ended',
+      importance: 'low'
+    })
+  }, [hasMountedStudyStateRef, isStudying])
 
   const loadDecks = async () => {
     const vaultPath = localStorage.getItem('netherite-current-vault-path')
@@ -463,12 +483,24 @@ export default function FlashcardsPage() {
 
   const handleStudyDeck = (deckId?: string) => {
     if (deckId) setSelectedDeckId(deckId)
+    emitPreChaosAppEvent({
+      source: 'flashcards',
+      action: 'flashcard_session_started',
+      label: deckId ? 'Started a flashcard deck review' : 'Started a flashcard review session',
+      importance: 'high'
+    })
     setIsStudying(true)
     setCurrentCardIndex(0)
   }
 
   const handleStudyAllMixed = () => {
     setSelectedDeckId(null)
+    emitPreChaosAppEvent({
+      source: 'flashcards',
+      action: 'flashcard_session_started',
+      label: 'Started a mixed flashcard review session',
+      importance: 'high'
+    })
     setIsStudying(true)
     setCurrentCardIndex(0)
   }
@@ -491,6 +523,16 @@ export default function FlashcardsPage() {
       
       const saved = await saveDeck(updatedDeck)
       if (!saved) return
+      emitPreChaosAppEvent({
+        source: 'flashcards',
+        action: response === 'good' || response === 'easy' ? 'flashcard_success' : 'flashcard_review',
+        label:
+          response === 'good' || response === 'easy'
+            ? `Successful flashcard review: ${response}`
+            : `Flashcard review response: ${response}`,
+        importance: response === 'good' || response === 'easy' ? 'high' : 'medium',
+        metadata: { response }
+      })
     }
 
     if (currentCardIndex < studyCards.length - 1) {
@@ -530,6 +572,12 @@ export default function FlashcardsPage() {
 
     const saved = await saveDeck(newDeck)
     if (!saved) return
+    emitPreChaosAppEvent({
+      source: 'flashcards',
+      action: 'deck_created',
+      label: 'Created a flashcard deck',
+      importance: 'medium'
+    })
     setDecks([...decks, newDeck])
     setShowCreateDeck(false)
     setNewDeckName("")
@@ -552,6 +600,12 @@ export default function FlashcardsPage() {
 
     const saved = await saveDeck(updatedDeck)
     if (!saved) return
+    emitPreChaosAppEvent({
+      source: 'flashcards',
+      action: 'card_created',
+      label: 'Added a flashcard',
+      importance: 'medium'
+    })
     await loadAttachmentItems()
     setShowAddCard(false)
     setNewQuestion("")
@@ -699,7 +753,16 @@ export default function FlashcardsPage() {
                     ? 'border border-[var(--nv-primary)] bg-[var(--nv-primary-soft)]'
                     : 'border border-transparent hover:bg-[var(--nv-surface)]'
                 }`}
-                onClick={() => { setSelectedDeckId(deck.id); setIsStudying(false) }}
+                onClick={() => {
+                  setSelectedDeckId(deck.id)
+                  setIsStudying(false)
+                  emitPreChaosAppEvent({
+                    source: 'flashcards',
+                    action: 'flashcard_deck_opened',
+                    label: 'Opened a flashcard deck',
+                    importance: 'medium'
+                  })
+                }}
               >
                 <div className="flex min-w-0 flex-1 items-center gap-3 text-left">
                   <div className="flex-1 min-w-0">

@@ -147,7 +147,7 @@ const mapNativeProgressUpdate = (payload: ElectronSyncProgressPayload): SyncProg
 }
 
 const withTimeout = async <T,>(promise: Promise<T>, ms: number, timeoutMessage: string) => {
-  let timeoutId: ReturnType<typeof window.setTimeout> | null = null
+  let timeoutId: number | null = null
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = window.setTimeout(() => {

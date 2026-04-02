@@ -5,6 +5,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
 import archiver from 'archiver'
 import * as unzipper from 'unzipper'
 
@@ -18,6 +19,9 @@ import {
 } from '../shared/runtime-config'
 
 const ALLOWED_SCHEMES = ['https:', 'http:']
+const PRECHAOS_HOST = '127.0.0.1'
+const PRECHAOS_PORT = 8765
+const PRECHAOS_BASE_URL = `http://${PRECHAOS_HOST}:${PRECHAOS_PORT}`
 let currentVaultPath: string | null = null
 let currentVaultReadOnly = false
 let lastSelectedFilePath: string | null = null
@@ -64,6 +68,254 @@ const ZIP_STORE_EXTENSIONS = new Set([
   '.webp',
   '.zip'
 ])
+
+type PreChaosState = {
+  process: ChildProcessWithoutNullStreams | null
+  online: boolean
+  endpoint: string
+  pythonPath: string | null
+  reason: string | null
+  logs: string[]
+}
+
+type CameraModuleMode = 'stopwatch' | 'stats' | 'expanded'
+
+type CameraModuleSnapshot = {
+  windowOpen: boolean
+  mode: CameraModuleMode
+  webcamEnabled: boolean
+  webcamOptIn: boolean
+  webcamState: 'disabled' | 'requesting' | 'active' | 'blocked'
+  webcamMetrics: {
+    face_presence: number
+    blink_intensity: number
+    movement: number
+    lighting: number
+    confidence: number
+    preview_frame?: string
+    left_eye_blink: number
+    right_eye_blink: number
+    face_landmarks: Array<{ x: number; y: number }>
+    face_outline: Array<{ x: number; y: number }>
+    left_eye_outline: Array<{ x: number; y: number }>
+    right_eye_outline: Array<{ x: number; y: number }>
+    ear: number
+    left_ear: number
+    right_ear: number
+    blink_count: number
+    low_light: boolean
+    face_detected: boolean
+    fatigue_status: 'Alert' | 'Drowsy' | 'No face'
+    webcam_risk: number
+    webcam_state: 'Stable' | 'Watch' | 'Elevated' | 'No face'
+    notes_risk: number
+    notes_state: 'Stable' | 'Reflective' | 'Strained' | 'Elevated' | 'No notes'
+    face_box: { x: number; y: number; width: number; height: number } | null
+  }
+  fatigueScore: number
+  sidecarState: 'idle' | 'connecting' | 'online' | 'offline'
+  prediction: {
+    risk: number
+    state: string
+    confidence: number
+  } | null
+  dataPulse: {
+    lastSavedAt: number
+    magnitude: number
+    label: string
+  }
+  updatedAt: number
+}
+
+const preChaosState: PreChaosState = {
+  process: null,
+  online: false,
+  endpoint: PRECHAOS_BASE_URL,
+  pythonPath: null,
+  reason: null,
+  logs: []
+}
+
+let cameraModuleWindow: BrowserWindow | null = null
+let isAppQuitting = false
+const cameraModuleSnapshot: CameraModuleSnapshot = {
+  windowOpen: false,
+  mode: 'expanded',
+  webcamEnabled: false,
+  webcamOptIn: false,
+  webcamState: 'disabled',
+  webcamMetrics: {
+    face_presence: 0,
+    blink_intensity: 0,
+    movement: 0,
+    lighting: 0,
+    confidence: 0,
+    preview_frame: undefined,
+    left_eye_blink: 0,
+    right_eye_blink: 0,
+    face_landmarks: [],
+    face_outline: [],
+    left_eye_outline: [],
+    right_eye_outline: [],
+    ear: 0,
+    left_ear: 0,
+    right_ear: 0,
+    blink_count: 0,
+    low_light: false,
+    face_detected: false,
+    fatigue_status: 'No face',
+    webcam_risk: 0,
+    webcam_state: 'No face',
+    notes_risk: 0,
+    notes_state: 'No notes',
+    face_box: null
+  },
+  fatigueScore: 0,
+  sidecarState: 'idle',
+  prediction: null,
+  dataPulse: {
+    lastSavedAt: 0,
+    magnitude: 0,
+    label: ''
+  },
+  updatedAt: Date.now()
+}
+
+const getPreChaosLogFile = () => join(app.getPath('userData'), 'prechaos.log')
+
+const appendPreChaosLog = (message: string) => {
+  const entry = `[${new Date().toISOString()}] ${message}`
+  preChaosState.logs = [...preChaosState.logs.slice(-79), entry]
+  void fs.promises
+    .mkdir(path.dirname(getPreChaosLogFile()), { recursive: true })
+    .then(() => fs.promises.appendFile(getPreChaosLogFile(), `${entry}\n`, 'utf-8'))
+    .catch(() => undefined)
+}
+
+const getPreChaosBackendRoot = () =>
+  app.isPackaged
+    ? join(process.resourcesPath, 'prechaos', 'backend')
+    : join(app.getAppPath(), 'prechaos', 'backend')
+
+const getPythonCandidates = () => {
+  const fromEnv = [process.env.PRECHAOS_PYTHON, process.env.PYTHON, process.env.PYTHON3].filter(
+    (value): value is string => Boolean(value)
+  )
+  return [...fromEnv, 'python', 'py']
+}
+
+const isSidecarHealthy = async () => {
+  try {
+    const response = await fetch(`${PRECHAOS_BASE_URL}/health`)
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+const waitForPreChaosHealth = async (timeoutMs = 12_000) => {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await isSidecarHealthy()) {
+      return true
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  }
+  return false
+}
+
+async function ensurePreChaosSidecar() {
+  if (await isSidecarHealthy()) {
+    preChaosState.online = true
+    preChaosState.reason = null
+    return { ok: true, online: true, endpoint: PRECHAOS_BASE_URL }
+  }
+
+  if (preChaosState.process && !preChaosState.process.killed) {
+    const healthy = await waitForPreChaosHealth(4_000)
+    preChaosState.online = healthy
+    preChaosState.reason = healthy ? null : 'PreChaos sidecar did not become healthy in time.'
+    return { ok: healthy, online: healthy, endpoint: PRECHAOS_BASE_URL }
+  }
+
+  const backendRoot = getPreChaosBackendRoot()
+  const mainFile = join(backendRoot, 'main.py')
+
+  if (!fs.existsSync(mainFile)) {
+    preChaosState.online = false
+    preChaosState.reason = `Missing sidecar entrypoint at ${mainFile}`
+    appendPreChaosLog(preChaosState.reason)
+    return { ok: false, online: false, endpoint: PRECHAOS_BASE_URL }
+  }
+
+  for (const candidate of getPythonCandidates()) {
+    try {
+      const args =
+        candidate === 'py'
+          ? ['-3', '-m', 'uvicorn', 'main:app', '--app-dir', backendRoot, '--host', PRECHAOS_HOST, '--port', String(PRECHAOS_PORT)]
+          : ['-m', 'uvicorn', 'main:app', '--app-dir', backendRoot, '--host', PRECHAOS_HOST, '--port', String(PRECHAOS_PORT)]
+      const child = spawn(candidate, args, {
+        cwd: backendRoot,
+        env: { ...process.env, PYTHONUNBUFFERED: '1' },
+        stdio: 'pipe'
+      })
+      preChaosState.process = child
+      preChaosState.pythonPath = candidate
+      appendPreChaosLog(`Starting PreChaos with ${candidate}`)
+
+      child.stdout.on('data', (chunk) => appendPreChaosLog(String(chunk).trim()))
+      child.stderr.on('data', (chunk) => appendPreChaosLog(String(chunk).trim()))
+      child.on('exit', (code) => {
+        preChaosState.online = false
+        preChaosState.process = null
+        preChaosState.reason = `PreChaos exited with code ${code ?? 'unknown'}`
+        appendPreChaosLog(preChaosState.reason)
+      })
+      child.on('error', (error) => {
+        preChaosState.online = false
+        preChaosState.reason = error.message
+        appendPreChaosLog(`PreChaos spawn error: ${error.message}`)
+      })
+
+      const healthy = await waitForPreChaosHealth()
+      if (healthy) {
+        preChaosState.online = true
+        preChaosState.reason = null
+        return { ok: true, online: true, endpoint: PRECHAOS_BASE_URL }
+      }
+
+      child.kill()
+    } catch (error) {
+      appendPreChaosLog(`Failed to launch with ${candidate}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  preChaosState.online = false
+  preChaosState.reason = 'Unable to launch PreChaos. Install Python and backend requirements to enable AI features.'
+  return { ok: false, online: false, endpoint: PRECHAOS_BASE_URL }
+}
+
+async function preChaosRequest<T>(route: string, init?: RequestInit): Promise<T> {
+  const ready = await ensurePreChaosSidecar()
+  if (!ready.online) {
+    throw new Error(preChaosState.reason ?? 'PreChaos is offline')
+  }
+
+  const response = await fetch(`${PRECHAOS_BASE_URL}${route}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {})
+    }
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`PreChaos request failed: ${response.status} ${body}`)
+  }
+
+  return (await response.json()) as T
+}
 
 const shouldStoreZipEntry = (filePath: string) => ZIP_STORE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
 
@@ -130,6 +382,7 @@ const getVaultMetaPath = (vaultPath: string) => path.join(vaultPath, NETHERITE_D
 const getAppDataRoot = () => join(app.getPath('userData'), 'Netherite')
 const getAccountsRoot = () => join(getAppDataRoot(), 'accounts')
 const getTempRoot = () => join(getAppDataRoot(), 'temp')
+const getRuntimeConfigPath = () => join(app.getPath('userData'), RUNTIME_CONFIG_FILE_NAME)
 const getAccountDataPath = (userId: string) => join(getAccountsRoot(), userId)
 const getAccountSyncMetaPath = (userId: string) => path.join(getAccountDataPath(userId), 'sync-meta.json')
 const formatDirectoryPath = (dirPath: string) => (dirPath.endsWith(path.sep) ? dirPath : `${dirPath}${path.sep}`)
@@ -138,7 +391,6 @@ const getVaultFlashcardsPath = (vaultPath: string) => path.join(getVaultMetaPath
 const getVaultAiPatternsPath = (vaultPath: string) => path.join(getVaultMetaPath(vaultPath), 'ai-patterns.json')
 const getVaultNotesPath = (vaultPath: string) => path.join(vaultPath, 'notes')
 const getVaultSyncMetaPath = (vaultPath: string) => path.join(getVaultMetaPath(vaultPath), 'sync-meta.json')
-const getRuntimeConfigPath = () => join(app.getPath('userData'), RUNTIME_CONFIG_FILE_NAME)
 
 const readBuildTimeConfigValue = (key: (typeof APPWRITE_CONFIG_KEYS)[number]) => {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
@@ -1154,6 +1406,122 @@ async function createVaultAtExactPath(targetPath: string, welcomeContent: string
   return resolvedVaultPath
 }
 
+const getCameraModuleBounds = (mode: CameraModuleMode) => {
+  if (mode === 'expanded') return { width: 760, height: 620, minWidth: 680, minHeight: 540 }
+  if (mode === 'stats') return { width: 620, height: 520, minWidth: 560, minHeight: 460 }
+  return { width: 272, height: 156, minWidth: 248, minHeight: 132 }
+}
+
+const broadcastCameraModuleSnapshot = () => {
+  const payload = { ...cameraModuleSnapshot }
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('prechaos:camera-module-snapshot', payload)
+    }
+  })
+}
+
+const loadRendererRoute = (window: BrowserWindow, route: string) => {
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    const baseUrl = process.env['ELECTRON_RENDERER_URL'].replace(/\/$/, '')
+    void window.loadURL(`${baseUrl}#${route}`)
+    return
+  }
+
+  void window.loadFile(join(__dirname, '../renderer/index.html'), {
+    hash: route
+  })
+}
+
+const syncCameraModuleSnapshot = (partial: Partial<CameraModuleSnapshot>) => {
+  Object.assign(cameraModuleSnapshot, partial, {
+    updatedAt: Date.now()
+  })
+  broadcastCameraModuleSnapshot()
+}
+
+const applyCameraModuleMode = (mode: CameraModuleMode) => {
+  cameraModuleSnapshot.mode = mode
+
+  if (!cameraModuleWindow || cameraModuleWindow.isDestroyed()) {
+    broadcastCameraModuleSnapshot()
+    return
+  }
+
+  const bounds = getCameraModuleBounds(mode)
+  cameraModuleWindow.setMinimumSize(bounds.minWidth, bounds.minHeight)
+  cameraModuleWindow.setSize(bounds.width, bounds.height)
+  broadcastCameraModuleSnapshot()
+}
+
+function createCameraModuleWindow(hiddenInit = false) {
+  if (cameraModuleWindow && !cameraModuleWindow.isDestroyed()) {
+    if (!hiddenInit) {
+      cameraModuleWindow.show()
+      cameraModuleWindow.focus()
+      syncCameraModuleSnapshot({ windowOpen: true })
+    }
+    return cameraModuleWindow
+  }
+
+  const bounds = getCameraModuleBounds(cameraModuleSnapshot.mode)
+  cameraModuleWindow = new BrowserWindow({
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: bounds.minWidth,
+    minHeight: bounds.minHeight,
+    frame: false,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#09090b',
+    title: 'Camera Module',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: join(__dirname, '../preload/index.js')
+    }
+  })
+
+  cameraModuleWindow.on('ready-to-show', () => {
+    if (!hiddenInit) {
+      cameraModuleWindow?.show()
+      cameraModuleWindow?.focus()
+    }
+  })
+
+  cameraModuleWindow.on('close', (event) => {
+    if (!isAppQuitting) {
+      event.preventDefault()
+      cameraModuleWindow?.hide()
+      syncCameraModuleSnapshot({ windowOpen: false })
+    }
+  })
+
+  cameraModuleWindow.on('closed', () => {
+    cameraModuleWindow = null
+    syncCameraModuleSnapshot({ windowOpen: false })
+  })
+
+  cameraModuleWindow.webContents.setWindowOpenHandler((details) => {
+    try {
+      const parsed = new URL(details.url)
+      if (ALLOWED_SCHEMES.includes(parsed.protocol)) {
+        void shell.openExternal(details.url)
+      }
+    } catch {
+      // invalid URL, do nothing
+    }
+    return { action: 'deny' }
+  })
+
+  if (!hiddenInit) {
+    syncCameraModuleSnapshot({ windowOpen: true })
+  }
+  loadRendererRoute(cameraModuleWindow, '/camera-module')
+  return cameraModuleWindow
+}
+
 async function resolvePathWithinVault(
   targetPath: string,
   options: { allowMissingLeaf?: boolean; expectDirectory?: boolean } = {}
@@ -1271,20 +1639,188 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  loadRendererRoute(mainWindow, '/')
 }
 
 // ── IPC Handlers ──────────────────────────────────────
 
-/** Open native folder-select dialog, returns the selected path or null */
 ipcMain.on('app:getRuntimeConfigSync', (event) => {
   event.returnValue = readRuntimeConfig()
 })
 
+ipcMain.handle('prechaos:camera-module-open', async () => {
+  createCameraModuleWindow(false)
+  return { ...cameraModuleSnapshot }
+})
+
+ipcMain.handle('prechaos:camera-module-close', async () => {
+  if (cameraModuleWindow && !cameraModuleWindow.isDestroyed()) {
+    cameraModuleWindow.hide()
+    syncCameraModuleSnapshot({ windowOpen: false })
+  } else {
+    syncCameraModuleSnapshot({ windowOpen: false })
+  }
+  return { ...cameraModuleSnapshot }
+})
+
+ipcMain.handle('prechaos:camera-module-state', async () => {
+  return { ...cameraModuleSnapshot }
+})
+
+ipcMain.handle('prechaos:camera-module-set-mode', async (_event, mode: CameraModuleMode) => {
+  applyCameraModuleMode(mode)
+  return { ...cameraModuleSnapshot }
+})
+
+ipcMain.on('prechaos:camera-module-sync', (_event, payload: Partial<CameraModuleSnapshot>) => {
+  syncCameraModuleSnapshot(payload)
+})
+
+ipcMain.handle('prechaos:log', async (_event, message: string) => {
+  appendPreChaosLog(message)
+  return { ok: true }
+})
+
+ipcMain.handle('prechaos:start', async () => {
+  return ensurePreChaosSidecar()
+})
+
+ipcMain.handle('prechaos:state', async () => {
+  const online = await isSidecarHealthy()
+  preChaosState.online = online
+  if (!online && !preChaosState.reason) {
+    preChaosState.reason = 'PreChaos sidecar is not responding.'
+  }
+  return {
+    online,
+    endpoint: PRECHAOS_BASE_URL,
+    reason: preChaosState.reason,
+    pythonPath: preChaosState.pythonPath,
+    logs: preChaosState.logs
+  }
+})
+
+ipcMain.handle(
+  'prechaos:predict',
+  async (
+    _event,
+    payload: {
+      features: number[][]
+      userId?: string
+      context?: {
+        route: string
+        page_name: 'landing' | 'notes' | 'flashcards' | 'todos' | 'habits' | 'analytics' | 'other'
+        productive_context: boolean
+        focused_editable: boolean
+        recent_meaningful_actions: number
+        recent_event_density: number
+        route_switches: number
+        route_dwell_seconds: number
+        note_activity: number
+        note_switches: number
+        note_saves: number
+        flashcard_activity: number
+        flashcard_answer_latency: number
+        flashcard_successes: number
+        todo_activity: number
+        todo_completions: number
+        habit_activity: number
+        habit_check_ins: number
+        progress_events: number
+        reading_mode: boolean
+        webcam_opt_in: boolean
+      }
+    }
+  ) => {
+  return preChaosRequest('/predict', {
+    method: 'POST',
+    body: JSON.stringify({
+      features: payload.features,
+      user_id: payload.userId ?? 'local-user',
+      context: payload.context ?? null
+    })
+  })
+})
+
+ipcMain.handle(
+  'prechaos:feedback',
+  async (_event, payload: { userId?: string; label: 'focused' | 'thinking' | 'distracted' | 'tired'; risk: number }) => {
+    return preChaosRequest('/feedback', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: payload.userId ?? 'local-user',
+        label: payload.label,
+        risk: payload.risk
+      })
+    })
+  }
+)
+
+ipcMain.handle('prechaos:baseline', async (_event, payload?: { userId?: string; features?: number[][] }) => {
+  if (payload?.features?.length) {
+    return preChaosRequest('/baseline', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: payload.userId ?? 'local-user',
+        features: payload.features
+      })
+    })
+  }
+
+  const userId = encodeURIComponent(payload?.userId ?? 'local-user')
+  return preChaosRequest(`/baseline?user_id=${userId}`, {
+    method: 'GET'
+  })
+})
+
+ipcMain.handle(
+  'prechaos:collect',
+  async (
+    _event,
+    payload: {
+      userId?: string
+      sessionId: string
+      samples: Array<{
+        timestamp: number
+        features: number[]
+        context: Record<string, unknown>
+        prediction?: { risk: number; state: string; confidence: number } | null
+      }>
+      events?: Array<Record<string, unknown>>
+    }
+  ) => {
+    return preChaosRequest('/collect', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: payload.userId ?? 'local-user',
+        session_id: payload.sessionId,
+        samples: payload.samples,
+        events: payload.events ?? []
+      })
+    })
+  }
+)
+
+ipcMain.handle('prechaos:dataset-status', async () => {
+  return preChaosRequest('/dataset/status', {
+    method: 'GET'
+  })
+})
+
+ipcMain.handle('prechaos:train-live', async () => {
+  return preChaosRequest('/train-live', {
+    method: 'POST',
+    body: JSON.stringify({})
+  })
+})
+
+ipcMain.handle('prechaos:session-replays', async () => {
+  return preChaosRequest('/sessions/replay', {
+    method: 'GET'
+  })
+})
+
+/** Open native folder-select dialog, returns the selected path or null */
 ipcMain.handle('selectFolder', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory']
@@ -1992,6 +2528,13 @@ app.whenReady().then(async () => {
   await ensureNetheriteAppDataDirectories()
   await loadAuthorizedVaultPaths()
   createWindow()
+  void ensurePreChaosSidecar()
+
+  setTimeout(() => {
+    if (!cameraModuleWindow) {
+      createCameraModuleWindow(true)
+    }
+  }, 3000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -2001,5 +2544,12 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
+  }
+})
+
+app.on('before-quit', () => {
+  isAppQuitting = true
+  if (preChaosState.process && !preChaosState.process.killed) {
+    preChaosState.process.kill()
   }
 })

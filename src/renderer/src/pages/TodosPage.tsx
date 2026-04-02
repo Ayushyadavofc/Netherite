@@ -3,6 +3,7 @@ import { Check, Plus, Trash2, Edit2, X, ChevronLeft, ChevronRight, Calendar as C
 import { useTodos, Todo, updateScraps, scrapRewardForDifficulty } from '@/hooks/use-data'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
 import { getLocalToday, parseLocalDate } from '@/lib/date'
+import { emitPreChaosAppEvent } from '@/prechaos/app-events'
 
 type TabType = 'Today' | 'This Week' | 'This Month' | 'This Year' | 'All'
 
@@ -31,6 +32,12 @@ export default function TodosPage() {
           ? { ...t, title, description, difficulty, dueDate } 
           : t
       ))
+      emitPreChaosAppEvent({
+        source: 'todos',
+        action: 'todo_updated',
+        label: 'Updated a todo item',
+        importance: 'medium'
+      })
     } else {
       const newTodo: Todo = {
         id: crypto.randomUUID(),
@@ -42,6 +49,12 @@ export default function TodosPage() {
         createdAt: Date.now()
       }
       setTodos(prev => [...prev, newTodo])
+      emitPreChaosAppEvent({
+        source: 'todos',
+        action: 'todo_created',
+        label: 'Created a new todo item',
+        importance: 'medium'
+      })
     }
     resetForm()
   }
@@ -77,6 +90,12 @@ export default function TodosPage() {
           return { ...t, completed: false, completedAt: undefined }
         } else {
           updateScraps(scrapRewardForDifficulty(diff))
+          emitPreChaosAppEvent({
+            source: 'todos',
+            action: 'todo_completed',
+            label: 'Completed a todo task',
+            importance: 'high'
+          })
           return { ...t, completed: true, completedAt: Date.now() }
         }
       }
@@ -133,9 +152,12 @@ export default function TodosPage() {
             onClick={(e) => {
               if (interactive && onClick) {
                 e.preventDefault()
-                onClick(i + 1)
+                const nextRating = count === i + 1 ? 0 : i + 1
+                onClick(nextRating)
               }
             }}
+            aria-label={`Set difficulty to ${i + 1} star${i === 0 ? '' : 's'}`}
+            aria-pressed={interactive ? count === i + 1 : undefined}
           >
             <Star className={`w-3 h-3 ${i < count ? 'fill-[var(--nv-primary)] text-[var(--nv-primary)]' : 'text-[var(--nv-subtle)]'}`} />
           </button>

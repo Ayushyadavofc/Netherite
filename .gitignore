@@ -77,3 +77,18 @@ Desktop.ini
 *.sln
 *.swp
 *.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv/
+ENV/
+env/
+.pytest_cache/
+
+# Project Data
+prechaos/backend/data/*.jsonl
+prechaos/backend/data/feedback.json

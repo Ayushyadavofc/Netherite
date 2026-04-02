@@ -621,6 +621,9 @@ export default function LandingPage() {
     }
 
     const nextVault = pendingSyncPrompt.vault
+    if (!nextVault.dirPath) {
+      return
+    }
     setPendingSyncPrompt(null)
     await resolveOwnershipAndOpen(nextVault.dirPath, nextVault.name)
   }
@@ -637,6 +640,10 @@ export default function LandingPage() {
 
     const pathParts = savedPath.split('/').filter(Boolean)
     const vaultName = pathParts[pathParts.length - 1]
+    if (!vaultName) {
+      toast.error('Could not recover the missing vault path.')
+      return
+    }
     const parentPath = savedPath.slice(0, savedPath.length - vaultName.length - 1)
 
     if (!parentPath) {

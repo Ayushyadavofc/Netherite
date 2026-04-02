@@ -9,7 +9,10 @@
     "dist:win": "npm run build && electron-builder --win nsis",
     "pack:win": "npm run build && electron-builder --win --dir",
     "start": "electron-vite preview",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "prechaos:api": "python -m uvicorn main:app --app-dir prechaos/backend --host 127.0.0.1 --port 8765",
+    "prechaos:requirements": "python -m pip install -r prechaos/backend/requirements.txt",
+    "prechaos:train": "python -c \"from prechaos.backend.app.training import train_from_dataset; import sys; print(train_from_dataset(sys.argv[1]).metrics)\""
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
@@ -22,6 +25,9 @@
     "@electron-toolkit/utils": "^3.0.0",
     "@hookform/resolvers": "^3.9.1",
     "@lezer/highlight": "^1.2.3",
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/drawing_utils": "^0.3.1675466124",
+    "@mediapipe/face_mesh": "^0.4.1657299874",
     "@radix-ui/react-accordion": "1.2.12",
     "@radix-ui/react-alert-dialog": "1.1.15",
     "@radix-ui/react-aspect-ratio": "1.1.8",
@@ -110,6 +116,18 @@
     "files": [
       "out/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "prechaos/backend",
+        "to": "prechaos/backend",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!data/live_*.jsonl"
+        ]
+      }
     ],
     "asar": true,
     "win": {
