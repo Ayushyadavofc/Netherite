@@ -1,0 +1,58 @@
+{
+  "correction_factors": [
+    1.0,
+    1.0,
+    1.0,
+    0.95,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "events": [
+    {
+      "user_id": "local-user",
+      "label": "focused",
+      "risk": 0.9973,
+      "hour": 3,
+      "timestamp": "2026-03-30T22:14:44.509051"
+    },
+    {
+      "user_id": "local-user",
+      "label": "distracted",
+      "risk": 0.9479,
+      "hour": 3,
+      "timestamp": "2026-03-30T22:15:39.175141"
+    },
+    {
+      "user_id": "local-user",
+      "label": "distracted",
+      "risk": 0.6349,
+      "hour": 3,
+      "timestamp": "2026-03-30T22:23:09.495641"
+    },
+    {
+      "user_id": "local-user",
+      "label": "focused",
+      "risk": 0.6364,
+      "hour": 4,
+      "timestamp": "2026-03-30T22:35:38.451388"
+    }
+  ]
+}
