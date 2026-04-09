@@ -1,19 +1,40 @@
 import { Link, useLocation } from 'react-router-dom'
 import { SettingsModal } from '../settings-modal'
 import { useState } from 'react'
-import { LogOut, Minus, RefreshCw, Settings, Square, X } from 'lucide-react'
+import appIcon from '../../../../../app-icon.png'
+import {
+  BarChart3,
+  CheckSquare,
+  Flame,
+  LayoutDashboard,
+  LogOut,
+  Minus,
+  NotebookPen,
+  RefreshCw,
+  Settings,
+  Shirt,
+  ShoppingCart,
+  Square,
+  X
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { SyncModal } from '@/components/SyncModal'
+import { StackedCardsIcon } from '@/components/ui/StackedCardsIcon'
 import { useAuthStore } from '@/stores/authStore'
 import { useSyncStore } from '@/stores/syncStore'
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard' },
-  { href: '/notes', label: 'Notes' },
-  { href: '/flashcards', label: 'Flashcards' },
-  { href: '/habits', label: 'Habits' },
-  { href: '/todos', label: 'To-Do' },
-  { href: '/analytics', label: 'AI Analytics' }
-]
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/notes', label: 'Notes', icon: NotebookPen },
+  { href: '/flashcards', label: 'Flashcards', icon: StackedCardsIcon },
+  { href: '/habits', label: 'Habits', icon: Flame },
+  { href: '/todos', label: 'To-Do', icon: CheckSquare },
+  { href: '/store', label: 'Store', icon: ShoppingCart },
+  { href: '/inventory', label: 'Inventory', icon: Shirt },
+  { href: '/analytics', label: 'AI Analytics', icon: BarChart3 }
+] as const satisfies ReadonlyArray<{ href: string; label: string; icon: LucideIcon | ((props: { className?: string }) => JSX.Element) }>
+
+const NAV_PILL_TRANSITION_MS = 180
 
 export function TopBar() {
   const location = useLocation()
@@ -38,23 +59,52 @@ export function TopBar() {
       >
         <div className="flex items-center gap-8 pl-4">
           <div className="flex items-center gap-2">
-            <span className="text-lg text-[var(--nv-primary)]">&#x2B21;</span>
+            <img src={appIcon} alt="Netherite" className="h-5 w-5 object-contain" />
             <span className="text-sm font-semibold text-[var(--nv-foreground)]">Netherite</span>
           </div>
-          <nav className="hidden md:flex gap-8 items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <nav className="hidden md:flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             {navItems.map((item) => {
               const isActive = location.pathname.startsWith(item.href)
+              const Icon = item.icon
               return (
                 <Link
                   key={item.href}
                   to={item.href}
-                  className={`px-3 py-2 rounded-lg text-sm tracking-widest uppercase transition-all ${
+                  title={isActive ? undefined : item.label}
+                  aria-label={item.label}
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`group relative flex h-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border px-3 transition-[width,height,background-color,border-color,color,box-shadow] duration-[180ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${
                     isActive
-                      ? 'bg-[var(--nv-primary-soft)] font-bold text-[var(--nv-primary)]'
-                      : 'font-medium text-[var(--nv-muted)] hover:bg-[var(--nv-surface)] hover:text-[var(--nv-foreground)]'
+                      ? 'w-32 border-[var(--nv-primary)]/60 bg-[var(--nv-primary)] text-[var(--nv-primary-contrast)]'
+                      : 'w-9 border-transparent bg-transparent text-[var(--nv-muted)] hover:bg-transparent hover:text-[var(--nv-foreground)] hover:shadow-none'
                   }`}
+                  style={
+                    isActive
+                      ? {
+                          boxShadow: '0 0 0 1px rgba(255,255,255,0.04) inset, 0 8px 20px var(--nv-primary-glow)'
+                        }
+                      : undefined
+                  }
                 >
-                  {item.label}
+                  <span
+                    className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2"
+                    style={{
+                      willChange: 'opacity, transform'
+                    }}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span
+                      className="overflow-hidden whitespace-nowrap text-[0.66rem] font-semibold uppercase tracking-[0.14em]"
+                      style={{
+                        maxWidth: isActive ? '92px' : '0px',
+                        opacity: isActive ? 1 : 0,
+                        transform: `translate3d(${isActive ? '0' : '-6px'}, 0, 0)`,
+                        transition: `max-width ${NAV_PILL_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1), opacity 120ms ease-out, transform ${NAV_PILL_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                  </span>
                 </Link>
               )
             })}

@@ -3,12 +3,7 @@ import { Bot, CheckCircle2, Eye, EyeOff, Palette, SlidersHorizontal, Sparkles, W
 import { toast } from 'sonner'
 
 import { useProfile } from '@/hooks/use-data'
-import {
-  DATABASE_ID,
-  USER_SETTINGS_COLLECTION_ID,
-  databases,
-  isAppwriteConfigured
-} from '@/lib/appwrite'
+import { isAppwriteConfigured } from '@/lib/appwrite'
 import { useAuthStore } from '@/stores/authStore'
 
 import {
@@ -437,7 +432,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   <div>
                     <p className="text-sm font-semibold text-white">Groq API Key</p>
                     <p className="mt-1 text-xs text-[var(--nv-muted)]">
-                      Used for AI-powered flashcard generation from your notes.
+                      Used for AI-powered flashcard generation from your notes. This key stays local on this device.
                     </p>
                   </div>
 
@@ -476,19 +471,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             ...prev,
                             geminiApiKey: geminiKey.trim()
                           }))
-
-                          if (isAppwriteConfigured() && currentUser) {
-                            try {
-                              await databases.updateDocument(
-                                DATABASE_ID,
-                                USER_SETTINGS_COLLECTION_ID,
-                                currentUser.$id,
-                                { gemini_api_key: geminiKey.trim() }
-                              )
-                            } catch {
-                              // Appwrite sync is best-effort; local save succeeded
-                            }
-                          }
 
                           setGeminiKeySaved(true)
                           toast.success('Groq API key saved.')

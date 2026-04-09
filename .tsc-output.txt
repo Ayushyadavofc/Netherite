@@ -1,0 +1,35 @@
+﻿src/renderer/src/habits/permanence.ts(68,41): error TS2802: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/renderer/src/habits/permanence.ts(69,39): error TS2802: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/renderer/src/habits/permanence.ts(213,43): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+src/renderer/src/habits/permanence.ts(364,14): error TS2802: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/renderer/src/pages/TodosPage.tsx(856,81): error TS2802: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/renderer/src/prechaos/useBehaviorCollector.ts(217,18): error TS2345: Argument of type '{ type: "typing"; label: string; route: string; importance: "medium"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "typing"; label: string; route: string; importance: "medium"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/useBehaviorCollector.ts(244,18): error TS2345: Argument of type '{ type: "route"; label: string; route: string; importance: "high"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "route"; label: string; route: string; importance: "high"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/useBehaviorCollector.ts(291,16): error TS2345: Argument of type '{ type: "focus"; label: string; route: string; importance: "low"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "focus"; label: string; route: string; importance: "low"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/useBehaviorCollector.ts(375,18): error TS2345: Argument of type '{ type: "notes" | "flashcard" | "todo" | "habit"; label: string; route: string; importance: "medium" | "low" | "high"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "notes" | "flashcard" | "todo" | "habit"; label: string; route: string; importance: "medium" | "low" | "high"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/useBehaviorCollector.ts(429,18): error TS2345: Argument of type '{ type: "idle"; label: string; route: string; importance: "high"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "idle"; label: string; route: string; importance: "high"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/useOptionalWebcamFatigue.ts(89,14): error TS2345: Argument of type '{ type: "webcam"; label: string; route: string; importance: "low" | "high"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "webcam"; label: string; route: string; importance: "low" | "high"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/usePreChaosRuntime.ts(99,29): error TS2339: Property 'DEV' does not exist on type 'ImportMetaEnv'.
+src/renderer/src/prechaos/usePreChaosRuntime.ts(245,31): error TS2339: Property 'DEV' does not exist on type 'ImportMetaEnv'.
+src/renderer/src/prechaos/webcamController.ts(388,25): error TS2345: Argument of type '{ type: "webcam"; label: string; route: string; importance: "high"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "webcam"; label: string; route: string; importance: "high"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/webcamController.ts(403,25): error TS2345: Argument of type '{ type: "webcam"; label: string; route: string; importance: "medium"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "webcam"; label: string; route: string; importance: "medium"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/webcamController.ts(500,29): error TS2345: Argument of type '{ type: "webcam"; label: string; route: string; importance: "low"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "webcam"; label: string; route: string; importance: "low"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/webcamController.ts(623,27): error TS2345: Argument of type '{ type: "webcam"; label: string; route: string; importance: "low" | "high"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "webcam"; label: string; route: string; importance: "low" | "high"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/prechaos/webcamController.ts(749,27): error TS2345: Argument of type '{ type: "webcam"; label: string; route: string; importance: "medium"; }' is not assignable to parameter of type 'Omit<PreChaosEvent, "timestamp" | "id"> & { timestamp?: number | undefined; }'.
+  Property 'collectible' is missing in type '{ type: "webcam"; label: string; route: string; importance: "medium"; }' but required in type 'Omit<PreChaosEvent, "timestamp" | "id">'.
+src/renderer/src/todos/momentum.ts(274,5): error TS2322: Type '{ todo: Todo; difficultyTag: TodoDifficultyTag; label: string | null; note: string | null; showReorderHint: boolean; }[]' is not assignable to type 'RankedTodo[]'.
+  Type '{ todo: Todo; difficultyTag: TodoDifficultyTag; label: string | null; note: string | null; showReorderHint: boolean; }' is not assignable to type 'RankedTodo'.
+    Types of property 'label' are incompatible.
+      Type 'string | null' is not assignable to type 'TodoSuggestionLabel'.
+        Type 'string' is not assignable to type 'TodoSuggestionLabel'.

@@ -27,6 +27,7 @@ import { AdvancedCanvas } from '../ui/AdvancedCanvas'
 import { DeleteConfirmDialog } from '../shared/DeleteConfirmDialog'
 import { GraphView } from './GraphView'
 import { ObsidianMarkdownEditor, type MarkdownEditorHandle } from './ObsidianMarkdownEditor'
+import { LOCAL_STORAGE_EVENT, dispatchLocalStorageChange, type LocalStorageChangeDetail } from '@/hooks/use-data'
 import {
   buildGeneratedAttachmentName,
   buildImportedAttachmentName,
@@ -37,6 +38,7 @@ import {
   type AttachmentItem
 } from '@/lib/attachments'
 import { emitPreChaosAppEvent } from '@/prechaos/app-events'
+import { DailyRhythmCard } from '@/prechaos/DailyRhythmCard'
 import { usePreChaosStore } from '@/prechaos/store'
 
 interface FsNode {
@@ -112,7 +114,7 @@ const syncWorkspaceState = (key: string, value: string | null, options?: { emit?
   }
 
   if (options?.emit) {
-    window.dispatchEvent(new Event('local-storage'))
+    dispatchLocalStorageChange(key)
   }
 }
 
@@ -298,26 +300,55 @@ export function Workspace() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [editingTitleValue, setEditingTitleValue] = useState('')
   const [showNoteStatsPanel, setShowNoteStatsPanel] = useState(true)
-  const appContext = usePreChaosStore((state) => state.appContext)
+  const noteTypingSpeed = usePreChaosStore((state) => state.appContext.typing_speed)
+  const notePauseTime = usePreChaosStore((state) => state.appContext.pause_time)
+  const noteBackspaceCount = usePreChaosStore((state) => state.appContext.backspace_count)
+  const noteTypingVariation = usePreChaosStore((state) => state.appContext.typing_variation)
+  const noteFocusedEditable = usePreChaosStore((state) => state.appContext.focused_editable)
+  const noteProductiveContext = usePreChaosStore((state) => state.appContext.productive_context)
+  const noteSaveCount = usePreChaosStore((state) => state.appContext.note_saves)
+  const noteActivityCount = usePreChaosStore((state) => state.appContext.note_activity)
 
   const saveTimerRef = useRef<number | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
   const lastOpenedNoteIdRef = useRef<string | null>(null)
+  const loadedVaultPathRef = useRef<string | null>(null)
   const selectedNotePathRef = useRef<string | null>(null)
+  const selectedNoteContentRef = useRef('')
   const selectedFolderPathRef = useRef('')
+  const editedContentRef = useRef('')
   const folderExpansionRef = useRef<Map<string, boolean>>(new Map())
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  const isTypingRef = useRef(false)
+  const typingTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const mounted = `[RENDERER][${new Date().toISOString()}] Workspace MOUNTED`
+    console.log(mounted)
+    void window.electronAPI.appLog(mounted)
+
+    return () => {
+      const unmounted = `[RENDERER][${new Date().toISOString()}] Workspace UNMOUNTED`
+      console.log(unmounted)
+      void window.electronAPI.appLog(unmounted)
+    }
+  }, [])
 
   useEffect(() => {
     const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null
     selectedNotePathRef.current = selectedNote?.fullPath ?? null
+    selectedNoteContentRef.current = selectedNote?.content ?? ''
   }, [notes, selectedNoteId])
 
   useEffect(() => {
     setActiveLineIndex(0)
     setEditingTitle(false)
   }, [selectedNoteId])
+
+  useEffect(() => {
+    editedContentRef.current = editedContent
+  }, [editedContent])
 
   const selectedNote = useMemo(
     () => notes.find((note) => note.id === selectedNoteId) ?? null,
@@ -358,31 +389,33 @@ export function Workspace() {
     () => [
       {
         label: 'Typing Speed',
-        value: `${appContext.typing_speed.toFixed(2)} keys/s`,
-        helper: appContext.focused_editable ? 'Live editor rhythm' : 'Focus the editor to record'
+        value: `${noteTypingSpeed.toFixed(2)} keys/s`,
+        helper: noteFocusedEditable ? 'Live editor rhythm' : 'Focus the editor to record'
       },
       {
         label: 'Avg Pause',
-        value: `${appContext.pause_time.toFixed(2)}s`,
+        value: `${notePauseTime.toFixed(2)}s`,
         helper: 'Between recent keystrokes'
       },
       {
         label: 'Backspaces',
-        value: String(appContext.backspace_count),
+        value: String(noteBackspaceCount),
         helper: 'Current sampling window'
       },
       {
         label: 'Rhythm Drift',
-        value: appContext.typing_variation.toFixed(2),
+        value: noteTypingVariation.toFixed(2),
         helper: 'Pause variation'
       }
     ],
-    [appContext.backspace_count, appContext.focused_editable, appContext.pause_time, appContext.typing_speed, appContext.typing_variation]
+    [noteBackspaceCount, noteFocusedEditable, notePauseTime, noteTypingSpeed, noteTypingVariation]
   )
 
   const loadVault = useCallback(
     async (preferredNotePath?: string | null, preferredFolderRelativePath?: string | null) => {
       const vaultPath = getCurrentVaultPath()
+      loadedVaultPathRef.current = vaultPath ? normalizeAbsolutePath(vaultPath) : null
+
       if (!vaultPath) {
         setNotes([])
         setFolders([])
@@ -485,6 +518,11 @@ export function Workspace() {
         loadedNotes.find((note) => normalizeAbsolutePath(note.fullPath) === selectedNotePathRef.current) ??
         loadedNotes[0] ??
         null
+      const nextSelectedNotePath = nextSelectedNote?.fullPath ? normalizeAbsolutePath(nextSelectedNote.fullPath) : null
+      const shouldPreserveEditedContent =
+        nextSelectedNotePath !== null &&
+        nextSelectedNotePath === selectedNotePathRef.current &&
+        editedContentRef.current !== selectedNoteContentRef.current
 
       const folderPaths = collectFolderPaths(noteNodes)
       const derivedFolderPath = nextSelectedNote?.linkable
@@ -522,7 +560,7 @@ export function Workspace() {
       setAttachments(loadedAttachments)
       setSelectedFolderRelativePath(folderPaths.has(requestedFolderPath) ? requestedFolderPath : derivedFolderPath)
       setSelectedNoteId(nextSelectedNote?.id ?? null)
-      setEditedContent(nextSelectedNote?.content ?? '')
+      setEditedContent(shouldPreserveEditedContent ? editedContentRef.current : nextSelectedNote?.content ?? '')
     },
     []
   )
@@ -532,16 +570,47 @@ export function Workspace() {
   }, [loadVault])
 
   useEffect(() => {
-    const syncWorkspace = () => {
-      void loadVault()
+    let syncTimeout: ReturnType<typeof setTimeout> | null = null
+
+    const syncWorkspace = (event?: Event) => {
+      if (isTypingRef.current) {
+        return
+      }
+
+      if (event instanceof StorageEvent) {
+        if (event.key && event.key !== 'netherite-current-vault-path') {
+          return
+        }
+      } else if (event) {
+        const detail = (event as CustomEvent<LocalStorageChangeDetail>).detail
+        if (detail?.key && detail.key !== 'netherite-current-vault-path') {
+          return
+        }
+      }
+
+      const nextVaultPath = getCurrentVaultPath()
+      const normalizedNextVaultPath = nextVaultPath ? normalizeAbsolutePath(nextVaultPath) : null
+      if (normalizedNextVaultPath === loadedVaultPathRef.current) {
+        return
+      }
+
+      if (syncTimeout) {
+        clearTimeout(syncTimeout)
+      }
+      syncTimeout = setTimeout(() => {
+        void loadVault()
+      }, 500)
     }
 
     window.addEventListener('storage', syncWorkspace)
-    window.addEventListener('local-storage', syncWorkspace)
+    window.addEventListener(LOCAL_STORAGE_EVENT, syncWorkspace)
 
     return () => {
+      if (syncTimeout) {
+        clearTimeout(syncTimeout)
+      }
       window.removeEventListener('storage', syncWorkspace)
-      window.removeEventListener('local-storage', syncWorkspace)
+      window.removeEventListener(LOCAL_STORAGE_EVENT, syncWorkspace)
     }
   }, [loadVault])
 
@@ -552,6 +621,9 @@ export function Workspace() {
       syncWorkspaceState(ACTIVE_NOTE_CONTENT_KEY, null)
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current)
+      }
+      if (typingTimeoutRef.current) {
+        window.clearTimeout(typingTimeoutRef.current)
       }
     }
   }, [])
@@ -623,6 +695,15 @@ export function Workspace() {
   const updateNoteContent = useCallback(
     (content: string) => {
       setEditedContent(content)
+      
+      isTypingRef.current = true
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current)
+      }
+      typingTimeoutRef.current = window.setTimeout(() => {
+        isTypingRef.current = false
+      }, 2000)
+
       if (!selectedNote) {
         return
       }
@@ -1758,7 +1839,7 @@ export function Workspace() {
                         <div>
                           <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.28em] text-[var(--nv-secondary)]">Live Note Stats</h3>
                           <p className="mt-1 text-xs text-[var(--nv-subtle)]">
-                            {appContext.productive_context
+                            {noteProductiveContext
                               ? 'Collector is recording this note session.'
                               : 'Focus the editor to start collecting note behavior.'}
                           </p>
@@ -1766,12 +1847,12 @@ export function Workspace() {
                         <div className="flex items-center gap-2">
                           <div
                             className={`rounded-full px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.18em] ${
-                              appContext.productive_context
+                              noteProductiveContext
                                 ? 'bg-[var(--nv-primary-soft)] text-[var(--nv-primary)]'
                                 : 'bg-[var(--nv-surface-strong)] text-[var(--nv-subtle)]'
                             }`}
                           >
-                            {appContext.productive_context ? 'Live' : 'Idle'}
+                            {noteProductiveContext ? 'Live' : 'Idle'}
                           </div>
                         </div>
                       </div>
@@ -1781,12 +1862,12 @@ export function Workspace() {
                           ...noteTelemetryCards,
                           {
                             label: 'Saves / Min',
-                            value: String(appContext.note_saves),
+                            value: String(noteSaveCount),
                             helper: 'Recent save frequency'
                           },
                           {
                             label: 'Activity / Min',
-                            value: String(appContext.note_activity),
+                            value: String(noteActivityCount),
                             helper: 'Meaningful note actions'
                           }
                         ].map((metric) => (
@@ -1802,6 +1883,8 @@ export function Workspace() {
                           </div>
                         ))}
                       </div>
+
+                      {noteProductiveContext && <DailyRhythmCard />}
                     </div>
                   ) : (
                     <button

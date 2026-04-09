@@ -6,7 +6,9 @@ node_modules/
 # Build output
 out/
 dist/
+dist-electron/
 release/
+build/
 coverage/
 .vite/
 .turbo/
@@ -14,7 +16,9 @@ coverage/
 
 # Environment and local config
 .env
+.env.local
 .env.*
+.env.*.local
 !.env.example
 *.local
 
@@ -24,6 +28,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+netherite-debug.log
 tsc-errors.txt
 tsc-web-errors.txt
 
@@ -38,6 +43,7 @@ tsc-web-errors.txt
 recover.py
 ObsidianMarkdownEditor.original.tsx
 fix.js
+.codex-tmp/
 
 # Local databases and app data
 *.db
@@ -81,14 +87,23 @@ Desktop.ini
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
+*.pyo
 *$py.class
 *.so
-.venv
+.venv/
 venv/
 ENV/
 env/
 .pytest_cache/
+*.egg-info/
 
 # Project Data
-prechaos/backend/data/*.jsonl
-prechaos/backend/data/feedback.json
+prechaos/backend/data/
+prechaos/backend/models/
+
+# Electron packaging
+*.exe
+*.dmg
+*.AppImage
+*.snap

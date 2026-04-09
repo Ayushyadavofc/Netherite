@@ -1018,6 +1018,13 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
       const noteChanged = activeNoteIdRef.current !== noteId
       if (!noteChanged && view.state.doc.toString() === value) return
       activeNoteIdRef.current = noteId
+      const currentSelection = view.state.selection.main
+      const nextSelection = noteChanged
+        ? { anchor: 0 }
+        : {
+            anchor: Math.min(currentSelection.anchor, value.length),
+            head: Math.min(currentSelection.head, value.length)
+          }
 
       view.dispatch({
         changes: {
@@ -1025,10 +1032,10 @@ export const ObsidianMarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownE
           to: view.state.doc.length,
           insert: value
         },
-        selection: { anchor: 0 },
-        scrollIntoView: true
+        selection: nextSelection,
+        scrollIntoView: noteChanged
       })
-      onActiveLineChangeRef.current?.(0)
+      onActiveLineChangeRef.current?.(noteChanged ? 0 : view.state.doc.lineAt(nextSelection.head ?? nextSelection.anchor).number - 1)
     }, [noteId, value])
 
     useEffect(() => {

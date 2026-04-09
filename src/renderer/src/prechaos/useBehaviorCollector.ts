@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { PRECHAOS_APP_EVENT, type PreChaosAppEventDetail } from './app-events'
+import type { PreChaosRawEvent } from './types'
 import { usePreChaosStore } from './store'
 
-const MOVEMENT_SAMPLE_MS = 2_000
-const KEY_WINDOW_MS = 12_000
+const CONTEXT_SNAPSHOT_MS = 2_000
 const CONTEXT_ACTIVITY_WINDOW_MS = 60_000
-const FATIGUE_RESUME_DELAY_MS = 2_000
+const DATASET_RESUME_DELAY_MS = 2_000
+const MOUSE_FLUSH_MS = 250
+const SCROLL_THROTTLE_MS = 1_000
+const WEBCAM_SIGNAL_MS = 5_000
+const ACTIVE_NOTE_PATH_KEY = 'netherite-active-note-path'
+const ACTIVE_NOTE_EDITING_KEY = 'netherite-active-note-editing'
+const ACTIVE_NOTE_CONTENT_KEY = 'netherite-active-note-content'
 
 type CollectorOptions = {
   enabled?: boolean
@@ -15,6 +21,7 @@ type CollectorOptions = {
 type StudyContextSnapshot = {
   isStudyContext: boolean
   studyContextEnteredAt: number | null
+  datasetWriteResumesAt: number | null
 }
 
 const getCurrentRoute = () => window.location.hash.replace(/^#/, '') || '/'
@@ -40,7 +47,36 @@ const getFocusedEditable = () => {
   )
 }
 
-const isStudyRoute = (route: string) => route.startsWith('/notes') || route.startsWith('/flashcards')
+const hasOpenEditableNote = () => {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const activeNotePath = window.localStorage.getItem(ACTIVE_NOTE_PATH_KEY)
+  const activeNoteEditing = window.localStorage.getItem(ACTIVE_NOTE_EDITING_KEY)
+  const activeNoteContent = window.localStorage.getItem(ACTIVE_NOTE_CONTENT_KEY)
+  return Boolean(activeNotePath?.trim() && activeNoteEditing !== null && activeNoteContent !== null)
+}
+
+const getKeyClass = (event: KeyboardEvent): NonNullable<PreChaosRawEvent['key_class']> => {
+  if (event.key === 'Backspace') return 'backspace'
+  if (event.key === 'Delete') return 'delete'
+  if (event.key === 'Enter') return 'enter'
+  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) return 'character'
+  if (
+    event.key.startsWith('Arrow') ||
+    event.key === 'Home' ||
+    event.key === 'End' ||
+    event.key === 'PageUp' ||
+    event.key === 'PageDown'
+  ) {
+    return 'navigation'
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+    return 'modifier'
+  }
+  return 'other'
+}
 
 export function useBehaviorCollector(options: CollectorOptions = {}): StudyContextSnapshot {
   const enabled = options.enabled ?? true
@@ -53,19 +89,10 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
 
   const [isStudyContext, setIsStudyContext] = useState(false)
   const [studyContextEnteredAt, setStudyContextEnteredAt] = useState<number | null>(null)
+  const [datasetWriteResumesAt, setDatasetWriteResumesAt] = useState<number | null>(null)
 
-  const keypressesRef = useRef<number[]>([])
-  const pausesRef = useRef<number[]>([])
-  const backspaceCountRef = useRef(0)
-  const idleMsRef = useRef(0)
-  const tabSwitchCountRef = useRef(0)
-  const mouseDistanceRef = useRef(0)
-  const lastKeyRef = useRef<number | null>(null)
   const lastActivityRef = useRef(Date.now())
-  const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
-  const lastEmittedFeaturesRef = useRef<number[] | null>(null)
   const lastMeaningfulActionRef = useRef(Date.now())
-  const meaningfulActionTimestampsRef = useRef<number[]>([])
   const routeSwitchCountRef = useRef(0)
   const routeEnteredAtRef = useRef(Date.now())
   const currentRouteRef = useRef(getCurrentRoute())
@@ -76,18 +103,22 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
   const flashcardLatencySamplesRef = useRef<number[]>([])
   const flashcardSuccessTimestampsRef = useRef<number[]>([])
   const progressEventTimestampsRef = useRef<number[]>([])
+  const todoActivityTimestampsRef = useRef<number[]>([])
+  const todoCompletionTimestampsRef = useRef<number[]>([])
+  const habitActivityTimestampsRef = useRef<number[]>([])
+  const habitCheckInTimestampsRef = useRef<number[]>([])
   const idleLoggedRef = useRef(false)
   const lastTypingEventLoggedRef = useRef(0)
   const fatigueScoreRef = useRef(fatigueScore)
   const webcamOptInRef = useRef(webcamOptIn)
   const flashcardReviewActiveRef = useRef(false)
   const isStudyContextRef = useRef(false)
-  const studyContextEnteredAtRef = useRef<number | null>(null)
-  const studyAccumulatedMsRef = useRef(0)
-  const studyStartedAtRef = useRef<number | null>(null)
-  const lastStudyFatigueScoreRef = useRef(fatigueScore)
-  const fatigueHoldUntilRef = useRef(0)
-  const fatigueHoldValueRef = useRef(fatigueScore)
+  const datasetWriteResumesAtRef = useRef<number | null>(null)
+  const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
+  const pendingMouseDeltaRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 })
+  const mouseFlushTimerRef = useRef<number | null>(null)
+  const lastScrollEventRef = useRef(0)
+  const lastWebcamSignalRef = useRef(0)
 
   useEffect(() => {
     fatigueScoreRef.current = fatigueScore
@@ -102,6 +133,7 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
       setStudyContextActive(false)
       setIsStudyContext(false)
       setStudyContextEnteredAt(null)
+      setDatasetWriteResumesAt(null)
       return
     }
 
@@ -109,25 +141,9 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
     const pruneRecent = (timestamps: number[], windowMs = CONTEXT_ACTIVITY_WINDOW_MS) =>
       timestamps.filter((stamp) => Date.now() - stamp <= windowMs)
 
-    const resetSamplingWindow = () => {
-      keypressesRef.current = []
-      pausesRef.current = []
-      backspaceCountRef.current = 0
-      idleMsRef.current = 0
-      tabSwitchCountRef.current = 0
-      mouseDistanceRef.current = 0
-      lastKeyRef.current = null
-      lastMouseRef.current = null
-      lastEmittedFeaturesRef.current = null
-      meaningfulActionTimestampsRef.current = []
-      lastMeaningfulActionRef.current = Date.now()
-      idleLoggedRef.current = false
-      lastTypingEventLoggedRef.current = 0
-    }
-
-    const computeStudyContext = (route: string, focusedEditable: boolean) => {
+    const computeStudyContext = (route: string) => {
       if (route.startsWith('/notes')) {
-        return focusedEditable
+        return hasOpenEditableNote()
       }
       if (route.startsWith('/flashcards')) {
         return flashcardReviewActiveRef.current
@@ -135,11 +151,9 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
       return false
     }
 
-    const syncStudyContext = (route = getCurrentRoute(), focusedEditable = getFocusedEditable()) => {
-      const nextStudyContext = computeStudyContext(route, focusedEditable)
-      const previousStudyContext = isStudyContextRef.current
-
-      if (nextStudyContext === previousStudyContext) {
+    const syncStudyContext = (route = getCurrentRoute()) => {
+      const nextStudyContext = computeStudyContext(route)
+      if (nextStudyContext === isStudyContextRef.current) {
         return nextStudyContext
       }
 
@@ -149,56 +163,47 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
       setIsStudyContext(nextStudyContext)
 
       if (nextStudyContext) {
-        studyStartedAtRef.current = now
-        studyContextEnteredAtRef.current = now
         setStudyContextEnteredAt(now)
-        fatigueHoldUntilRef.current = now + FATIGUE_RESUME_DELAY_MS
-        fatigueHoldValueRef.current = lastStudyFatigueScoreRef.current
+        datasetWriteResumesAtRef.current = now + DATASET_RESUME_DELAY_MS
+        setDatasetWriteResumesAt(datasetWriteResumesAtRef.current)
         lastActivityRef.current = now
         lastMeaningfulActionRef.current = now
       } else {
-        if (studyStartedAtRef.current !== null) {
-          studyAccumulatedMsRef.current += now - studyStartedAtRef.current
-        }
-        studyStartedAtRef.current = null
-        studyContextEnteredAtRef.current = null
         setStudyContextEnteredAt(null)
-        resetSamplingWindow()
+        datasetWriteResumesAtRef.current = null
+        setDatasetWriteResumesAt(null)
       }
 
       return nextStudyContext
     }
 
-    const getStudySessionDurationMinutes = (now: number) => {
-      const liveStudyMs =
-        studyStartedAtRef.current !== null && isStudyContextRef.current ? now - studyStartedAtRef.current : 0
-      return (studyAccumulatedMsRef.current + liveStudyMs) / 60_000
+    const shouldWriteToDataset = (timestamp: number) =>
+      isStudyContextRef.current &&
+      datasetWriteResumesAtRef.current !== null &&
+      timestamp >= datasetWriteResumesAtRef.current
+
+    const emitRawEvent = (event: Omit<PreChaosRawEvent, 'timestamp'>, timestamp = Date.now()) => {
+      pushBehavior(
+        {
+          timestamp,
+          ...event
+        },
+        timestamp,
+        {
+          isStudyContext: isStudyContextRef.current,
+          writeToDataset: shouldWriteToDataset(timestamp)
+        }
+      )
     }
 
     const markActivity = () => {
-      if (!isStudyContextRef.current) {
-        return
-      }
-      const now = Date.now()
-      const idleGap = now - lastActivityRef.current
-      if (idleGap > 1_500) {
-        idleMsRef.current += idleGap
-      }
-      lastActivityRef.current = now
+      lastActivityRef.current = Date.now()
     }
 
     const markMeaningfulAction = () => {
-      if (!isStudyContextRef.current) {
-        return
-      }
-
       const route = getCurrentRoute()
       const now = Date.now()
       const secondsSinceLastMeaningful = (now - lastMeaningfulActionRef.current) / 1000
-
-      meaningfulActionTimestampsRef.current = [...meaningfulActionTimestampsRef.current, now].filter(
-        (stamp) => now - stamp <= 30_000
-      )
 
       if (route.startsWith('/notes')) {
         noteActivityTimestampsRef.current = pruneRecent([...noteActivityTimestampsRef.current, now])
@@ -208,26 +213,46 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
           flashcardLatencySamplesRef.current.push(Math.min(secondsSinceLastMeaningful, 18))
           flashcardLatencySamplesRef.current = flashcardLatencySamplesRef.current.slice(-10)
         }
+      } else if (route.startsWith('/todos')) {
+        todoActivityTimestampsRef.current = pruneRecent([...todoActivityTimestampsRef.current, now])
+      } else if (route.startsWith('/habits')) {
+        habitActivityTimestampsRef.current = pruneRecent([...habitActivityTimestampsRef.current, now])
       }
 
       lastMeaningfulActionRef.current = now
       markActivity()
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!syncStudyContext()) {
+    const flushMouseMovement = () => {
+      mouseFlushTimerRef.current = null
+      const pending = pendingMouseDeltaRef.current
+      if (pending.dx === 0 && pending.dy === 0) {
         return
       }
 
+      emitRawEvent({
+        type: 'mouse_move',
+        dx: Number(pending.dx.toFixed(2)),
+        dy: Number(pending.dy.toFixed(2))
+      })
+      pendingMouseDeltaRef.current = { dx: 0, dy: 0 }
+    }
+
+    const scheduleMouseFlush = () => {
+      if (mouseFlushTimerRef.current !== null) {
+        return
+      }
+      mouseFlushTimerRef.current = window.setTimeout(flushMouseMovement, MOUSE_FLUSH_MS)
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      syncStudyContext()
+
       const now = Date.now()
-      keypressesRef.current.push(now)
-      if (lastKeyRef.current) {
-        pausesRef.current.push(Math.min((now - lastKeyRef.current) / 1000, 10))
-      }
-      if (event.key === 'Backspace' || event.key === 'Delete') {
-        backspaceCountRef.current += 1
-      }
-      lastKeyRef.current = now
+      emitRawEvent({
+        type: 'key_down',
+        key_class: getKeyClass(event)
+      }, now)
 
       if (now - lastTypingEventLoggedRef.current > 3_000) {
         lastTypingEventLoggedRef.current = now
@@ -243,28 +268,26 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
     }
 
     const onMouseMove = (event: MouseEvent) => {
-      if (!isStudyContextRef.current) {
-        return
-      }
-
       if (lastMouseRef.current) {
-        const dx = event.clientX - lastMouseRef.current.x
-        const dy = event.clientY - lastMouseRef.current.y
-        mouseDistanceRef.current += Math.sqrt(dx * dx + dy * dy)
+        pendingMouseDeltaRef.current.dx += event.clientX - lastMouseRef.current.x
+        pendingMouseDeltaRef.current.dy += event.clientY - lastMouseRef.current.y
+        scheduleMouseFlush()
       }
       lastMouseRef.current = { x: event.clientX, y: event.clientY }
       markActivity()
     }
 
     const onVisibility = () => {
-      if (!isStudyContextRef.current) {
-        syncStudyContext()
-        return
-      }
+      syncStudyContext()
 
-      tabSwitchCountRef.current += document.hidden ? 1 : 0
+      const hidden = document.hidden
+      emitRawEvent({
+        type: 'visibility_change',
+        hidden
+      })
+
       const webcamState = usePreChaosStore.getState().webcamState
-      if (document.hidden && webcamState !== 'requesting') {
+      if (hidden && webcamState !== 'requesting') {
         logEvent({
           type: 'route',
           label: 'App hidden or tab switched',
@@ -283,9 +306,6 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
       )
 
       syncStudyContext(route)
-      if (!isStudyContextRef.current) {
-        return
-      }
 
       if (
         route.startsWith('/flashcards') &&
@@ -308,18 +328,24 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
     }
 
     const onScroll = () => {
-      if (!isStudyContextRef.current) {
-        return
+      const now = Date.now()
+      if (now - lastScrollEventRef.current >= SCROLL_THROTTLE_MS) {
+        lastScrollEventRef.current = now
+        emitRawEvent({
+          type: 'scroll'
+        }, now)
       }
       markMeaningfulAction()
     }
 
     const onFocusIn = () => {
       const route = getCurrentRoute()
-      const nowStudyContext = syncStudyContext(route)
-      if (!nowStudyContext) {
-        return
-      }
+      syncStudyContext(route)
+
+      emitRawEvent({
+        type: 'focus',
+        route
+      })
 
       logEvent({
         type: 'focus',
@@ -333,16 +359,21 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
     const onHashChange = () => {
       const previousRoute = currentRouteRef.current
       const route = getCurrentRoute()
+      const now = Date.now()
 
-      if (isStudyRoute(previousRoute) && isStudyRoute(route) && previousRoute !== route) {
+      if (previousRoute !== route) {
         routeSwitchCountRef.current += 1
+        emitRawEvent({
+          type: 'route_change',
+          route
+        }, now)
       }
       if (previousRoute.startsWith('/notes') && route.startsWith('/notes') && previousRoute !== route) {
-        noteSwitchTimestampsRef.current = pruneRecent([...noteSwitchTimestampsRef.current, Date.now()])
+        noteSwitchTimestampsRef.current = pruneRecent([...noteSwitchTimestampsRef.current, now])
       }
 
       currentRouteRef.current = route
-      routeEnteredAtRef.current = Date.now()
+      routeEnteredAtRef.current = now
       syncStudyContext(route)
     }
 
@@ -364,11 +395,6 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
       }
 
       syncStudyContext(route)
-      if (!isStudyContextRef.current) {
-        return
-      }
-
-      let shouldBoostMeaningfulAction = true
 
       if (detail.source === 'notes') {
         noteActivityTimestampsRef.current = pruneRecent([...noteActivityTimestampsRef.current, now])
@@ -387,30 +413,45 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
           flashcardSuccessTimestampsRef.current = pruneRecent([...flashcardSuccessTimestampsRef.current, now])
           progressEventTimestampsRef.current = pruneRecent([...progressEventTimestampsRef.current, now])
         }
-        if (detail.action === 'flashcard_review') {
-          flashcardLatencySamplesRef.current = flashcardLatencySamplesRef.current.slice(-10)
+      }
+
+      if (detail.source === 'todos') {
+        todoActivityTimestampsRef.current = pruneRecent([...todoActivityTimestampsRef.current, now])
+        if (detail.action === 'todo_completed') {
+          todoCompletionTimestampsRef.current = pruneRecent([...todoCompletionTimestampsRef.current, now])
         }
       }
 
-      const shouldLogAppEvent = !(detail.source === 'notes' && detail.action === 'note_keystroke')
+      if (detail.source === 'habits') {
+        habitActivityTimestampsRef.current = pruneRecent([...habitActivityTimestampsRef.current, now])
+        if (detail.action === 'habit_checked') {
+          habitCheckInTimestampsRef.current = pruneRecent([...habitCheckInTimestampsRef.current, now])
+        }
+      }
 
-      if (shouldLogAppEvent) {
+      emitRawEvent({
+        type: 'study_action',
+        route,
+        action: detail.action
+      }, now)
+
+      if (!(detail.source === 'notes' && detail.action === 'note_keystroke')) {
         logEvent({
-          type: detail.source === 'notes' ? 'notes' : 'flashcard',
+          type:
+            detail.source === 'notes'
+              ? 'notes'
+              : detail.source === 'flashcards'
+                ? 'flashcard'
+                : detail.source === 'todos'
+                  ? 'todo'
+                  : 'habit',
           label: detail.label,
           route,
           importance: detail.importance ?? 'medium'
         })
       }
 
-      if (shouldBoostMeaningfulAction) {
-        lastMeaningfulActionRef.current = now
-        meaningfulActionTimestampsRef.current = [...meaningfulActionTimestampsRef.current, now].filter(
-          (stamp) => now - stamp <= 30_000
-        )
-      }
-
-      markActivity()
+      markMeaningfulAction()
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -423,19 +464,18 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
     document.addEventListener('visibilitychange', onVisibility)
 
     syncStudyContext(currentRouteRef.current)
+    emitRawEvent({
+      type: 'route_change',
+      route: currentRouteRef.current
+    }, Date.now())
 
     const interval = window.setInterval(() => {
       const now = Date.now()
       const currentRoute = getCurrentRoute()
       currentRouteRef.current = currentRoute
 
-      const recentKeypresses = keypressesRef.current.filter((stamp) => now - stamp <= KEY_WINDOW_MS)
-      keypressesRef.current = recentKeypresses
-      const recentPauses = pausesRef.current.slice(-20)
-      pausesRef.current = recentPauses
-
       const focusedEditable = getFocusedEditable()
-      const currentStudyContext = syncStudyContext(currentRoute, focusedEditable)
+      const currentStudyContext = syncStudyContext(currentRoute)
       const pageName = getPageName(currentRoute)
       const routeDwellSeconds = (now - routeEnteredAtRef.current) / 1000
       const secondsSinceLastActivity = (now - lastActivityRef.current) / 1000
@@ -466,127 +506,74 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
       flashcardSuccessTimestampsRef.current = pruneRecent(flashcardSuccessTimestampsRef.current)
       const progressEvents = pruneRecent(progressEventTimestampsRef.current).length
       progressEventTimestampsRef.current = pruneRecent(progressEventTimestampsRef.current)
-
-      const baseContext = {
-        route: currentRoute,
-        page_name: pageName,
-        productive_context: currentStudyContext,
-        focused_editable: focusedEditable,
-        recent_meaningful_actions: currentStudyContext
-          ? Math.max(0, Math.round((30 - Math.min(secondsSinceMeaningfulAction, 30)) / 3))
-          : 0,
-        recent_event_density: currentStudyContext
-          ? Number(Math.min(meaningfulActionTimestampsRef.current.length / 8, 10).toFixed(4))
-          : 0,
-        route_switches: currentStudyContext ? routeSwitchCountRef.current : 0,
-        route_dwell_seconds: Number(routeDwellSeconds.toFixed(4)),
-        note_activity: currentStudyContext ? noteActivity : 0,
-        note_switches: currentStudyContext ? noteSwitches : 0,
-        note_saves: currentStudyContext ? noteSaves : 0,
-        typing_speed: 0,
-        pause_time: 0,
-        typing_variation: 0,
-        backspace_count: 0,
-        flashcard_activity: currentStudyContext ? flashcardActivity : 0,
-        flashcard_answer_latency: 0,
-        flashcard_successes: currentStudyContext ? flashcardSuccesses : 0,
-        todo_activity: 0,
-        todo_completions: 0,
-        habit_activity: 0,
-        habit_check_ins: 0,
-        progress_events: currentStudyContext ? progressEvents : 0,
-        reading_mode: false,
-        webcam_opt_in: webcamOptInRef.current
-      } as const
-
-      if (!currentStudyContext) {
-        setAppContext(baseContext)
-        routeSwitchCountRef.current = 0
-        return
-      }
-
-      const typingSpeed = recentKeypresses.length / (KEY_WINDOW_MS / 1000)
-      const averagePause = recentPauses.length
-        ? recentPauses.reduce((sum, value) => sum + value, 0) / recentPauses.length
-        : Math.min(Math.max(secondsSinceLastActivity, 0.18), 1.5)
-      const variation = recentPauses.length
-        ? Math.sqrt(
-            recentPauses.reduce((sum, value) => sum + Math.pow(value - averagePause, 2), 0) / recentPauses.length
-          )
-        : 0
-      const errorScore = Math.min(backspaceCountRef.current / Math.max(recentKeypresses.length, 1), 1)
-      const idleTime = Math.min(Math.max(idleMsRef.current / 1000, secondsSinceLastActivity), 30)
-      const mouseMovementSpeed = Math.min(mouseDistanceRef.current / (MOVEMENT_SAMPLE_MS / 1000) / 100, 10)
-      const tabSwitchFrequency = Math.min(tabSwitchCountRef.current / 10, 5)
+      const todoActivity = pruneRecent(todoActivityTimestampsRef.current).length
+      todoActivityTimestampsRef.current = pruneRecent(todoActivityTimestampsRef.current)
+      const todoCompletions = pruneRecent(todoCompletionTimestampsRef.current).length
+      todoCompletionTimestampsRef.current = pruneRecent(todoCompletionTimestampsRef.current)
+      const habitActivity = pruneRecent(habitActivityTimestampsRef.current).length
+      habitActivityTimestampsRef.current = pruneRecent(habitActivityTimestampsRef.current)
+      const habitCheckIns = pruneRecent(habitCheckInTimestampsRef.current).length
+      habitCheckInTimestampsRef.current = pruneRecent(habitCheckInTimestampsRef.current)
       const flashcardAnswerLatency = flashcardLatencySamplesRef.current.length
         ? flashcardLatencySamplesRef.current.reduce((sum, value) => sum + value, 0) /
           flashcardLatencySamplesRef.current.length
         : 0
-      const sessionDuration = getStudySessionDurationMinutes(now)
 
-      const deliberatePause =
-        !document.hidden &&
-        (focusedEditable || secondsSinceMeaningfulAction < 15) &&
-        secondsSinceLastActivity >= 2 &&
-        secondsSinceLastActivity <= 20
-
-      let adjustedTypingSpeed = typingSpeed
-      let adjustedAveragePause = averagePause
-      let adjustedVariation = variation
-      let adjustedIdleTime = idleTime
-
-      if (deliberatePause) {
-        adjustedIdleTime *= 0.25
-        adjustedAveragePause = Math.min(averagePause * 0.45, 0.45)
-        adjustedVariation = variation * 0.6
-        adjustedTypingSpeed = Math.max(typingSpeed, focusedEditable ? 0.18 : 0.08)
+      if (webcamOptInRef.current && now - lastWebcamSignalRef.current >= WEBCAM_SIGNAL_MS) {
+        lastWebcamSignalRef.current = now
+        emitRawEvent({
+          type: 'webcam_signal',
+          fatigue_score: Number(fatigueScoreRef.current.toFixed(4)),
+          confidence: 1
+        }, now)
       }
-
-      const effectiveFatigueScore =
-        now < fatigueHoldUntilRef.current ? fatigueHoldValueRef.current : fatigueScoreRef.current
-      if (now >= fatigueHoldUntilRef.current) {
-        lastStudyFatigueScoreRef.current = fatigueScoreRef.current
-      }
-
-      const nextFeatures = [
-        Number(adjustedTypingSpeed.toFixed(4)),
-        Number(adjustedAveragePause.toFixed(4)),
-        Number(adjustedVariation.toFixed(4)),
-        Number(errorScore.toFixed(4)),
-        Number(adjustedIdleTime.toFixed(4)),
-        Number(mouseMovementSpeed.toFixed(4)),
-        Number(tabSwitchFrequency.toFixed(4)),
-        Number(sessionDuration.toFixed(4)),
-        Number(effectiveFatigueScore.toFixed(4))
-      ]
-
-      const previous = lastEmittedFeaturesRef.current
-      const smoothedFeatures = previous
-        ? nextFeatures.map((value, index) => Number((previous[index] * 0.65 + value * 0.35).toFixed(4)))
-        : nextFeatures
-
-      pushBehavior(smoothedFeatures)
-      lastEmittedFeaturesRef.current = smoothedFeatures
 
       setAppContext({
-        ...baseContext,
-        recent_event_density: Number(Math.min(meaningfulActionTimestampsRef.current.length / 8, 10).toFixed(4)),
-        typing_speed: Number(adjustedTypingSpeed.toFixed(4)),
-        pause_time: Number(adjustedAveragePause.toFixed(4)),
-        typing_variation: Number(adjustedVariation.toFixed(4)),
-        backspace_count: backspaceCountRef.current,
+        route: currentRoute,
+        page_name: pageName,
+        productive_context: currentStudyContext,
+        focused_editable: focusedEditable,
+        recent_meaningful_actions: Math.max(0, Math.round((30 - Math.min(secondsSinceMeaningfulAction, 30)) / 3)),
+        recent_event_density: Number(
+          Math.min(
+            noteActivity +
+              flashcardActivity +
+              todoActivity +
+              habitActivity +
+              progressEvents +
+              (secondsSinceLastActivity < 4 ? 1 : 0),
+            10
+          ).toFixed(4)
+        ),
+        route_switches: routeSwitchCountRef.current,
+        route_dwell_seconds: Number(routeDwellSeconds.toFixed(4)),
+        note_activity: noteActivity,
+        note_switches: noteSwitches,
+        note_saves: noteSaves,
+        typing_speed: 0,
+        pause_time: 0,
+        typing_variation: 0,
+        backspace_count: 0,
+        flashcard_activity: flashcardActivity,
         flashcard_answer_latency: Number(flashcardAnswerLatency.toFixed(4)),
-        reading_mode: !focusedEditable && adjustedTypingSpeed < 0.2 && adjustedIdleTime < 12
+        flashcard_successes: flashcardSuccesses,
+        todo_activity: todoActivity,
+        todo_completions: todoCompletions,
+        habit_activity: habitActivity,
+        habit_check_ins: habitCheckIns,
+        progress_events: progressEvents,
+        reading_mode: !focusedEditable && secondsSinceLastActivity < 12,
+        webcam_opt_in: webcamOptInRef.current
       })
 
-      backspaceCountRef.current = 0
-      idleMsRef.current = 0
-      mouseDistanceRef.current = 0
-      tabSwitchCountRef.current = 0
       routeSwitchCountRef.current = 0
-    }, MOVEMENT_SAMPLE_MS)
+    }, CONTEXT_SNAPSHOT_MS)
 
     return () => {
+      if (mouseFlushTimerRef.current !== null) {
+        window.clearTimeout(mouseFlushTimerRef.current)
+      }
+      flushMouseMovement()
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mousedown', onMouseDown)
@@ -600,5 +587,5 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
     }
   }, [enabled, logEvent, pushBehavior, setAppContext, setStudyContextActive])
 
-  return { isStudyContext, studyContextEnteredAt }
+  return { isStudyContext, studyContextEnteredAt, datasetWriteResumesAt }
 }

@@ -7,7 +7,9 @@ import { GenerateFlashcardsModal } from '@/components/flashcards/GenerateFlashca
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { extractMarkdownPreviewText } from '@/components/shared/MarkdownContent'
 import { detectAttachmentKind, normalizePath, type AttachmentItem } from '@/lib/attachments'
+import { emitFlashcardsDataChange } from '@/lib/flashcards-data'
 import { emitPreChaosAppEvent } from '@/prechaos/app-events'
+import { DailyRhythmCard } from '@/prechaos/DailyRhythmCard'
 import { Toaster, toast } from 'sonner'
 
 export type CardState = 'new' | 'learning' | 'review' | 'relearning'
@@ -447,6 +449,7 @@ export default function FlashcardsPage() {
     try {
       await window.electronAPI.writeFile(fullPath, content)
       setDecks(prev => prev.map(d => d.id === deck.id ? deck : d))
+      emitFlashcardsDataChange()
       return true
     } catch (err) {
       toast.error('Save failed — your changes may not have been written to disk.')
@@ -648,6 +651,7 @@ export default function FlashcardsPage() {
       await window.electronAPI.deleteVaultItem(fullPath)
       setDecks((current) => current.filter((item) => item.id !== deck.id))
       setSelectedDeckId((current) => (current === deck.id ? null : current))
+      emitFlashcardsDataChange()
     } catch (error) {
       toast.error('Could not delete this deck.')
       console.error(error)
@@ -688,6 +692,7 @@ export default function FlashcardsPage() {
         const content = await window.electronAPI.readFile(normalizedPath)
         const newDeck = parseDeckFile(content, normalizedPath)
         setDecks(prev => [...prev, newDeck])
+        emitFlashcardsDataChange()
       } catch (e) {}
     }
   }
@@ -818,24 +823,27 @@ export default function FlashcardsPage() {
 
         {/* Session Stats */}
         {isStudying && (
-          <div className="mx-4 mb-4 p-4 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-lg">
-            <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] mb-3 font-bold">Session</h4>
-            <div className="flex justify-between items-end mb-3">
-              <span className="text-[var(--nv-muted)] text-xs uppercase">Remaining</span>
-              <span className="text-xl font-bold text-white font-headline">{studyCards.length - currentCardIndex}</span>
+          <div className="mx-4 mb-4 space-y-4">
+            <div className="p-4 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-lg">
+              <h4 className="text-[0.6rem] uppercase tracking-widest text-[var(--nv-muted)] mb-3 font-bold">Session</h4>
+              <div className="flex justify-between items-end mb-3">
+                <span className="text-[var(--nv-muted)] text-xs uppercase">Remaining</span>
+                <span className="text-xl font-bold text-white font-headline">{studyCards.length - currentCardIndex}</span>
+              </div>
+              <div className="w-full bg-[var(--nv-bg)] border border-[var(--nv-border)] h-1.5 rounded-full overflow-hidden mb-2">
+                <div 
+                  className="h-full bg-[var(--nv-primary)] transition-all duration-300 shadow-[0_0_8px_var(--nv-primary-glow)]" 
+                  style={{ width: `${(currentCardIndex / Math.max(1, studyCards.length)) * 100}%` }}
+                />
+              </div>
+              <button 
+                 onClick={() => { setIsStudying(false) }}
+                 className="mt-3 w-full py-2 bg-transparent border border-[var(--nv-border)] text-[var(--nv-muted)] rounded font-bold text-[0.6rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors"
+              >
+                 Abort Session
+              </button>
             </div>
-            <div className="w-full bg-[var(--nv-bg)] border border-[var(--nv-border)] h-1.5 rounded-full overflow-hidden mb-2">
-              <div 
-                className="h-full bg-[var(--nv-primary)] transition-all duration-300 shadow-[0_0_8px_var(--nv-primary-glow)]" 
-                style={{ width: `${(currentCardIndex / Math.max(1, studyCards.length)) * 100}%` }}
-              />
-            </div>
-            <button 
-               onClick={() => { setIsStudying(false) }}
-               className="mt-3 w-full py-2 bg-transparent border border-[var(--nv-border)] text-[var(--nv-muted)] rounded font-bold text-[0.6rem] uppercase tracking-widest hover:border-white hover:text-white transition-colors"
-            >
-               Abort Session
-            </button>
+            <DailyRhythmCard />
           </div>
         )}
       </aside>

@@ -5,18 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import joblib
 import numpy as np
-import torch
 from openpyxl import load_workbook
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
 
-from .config import FEATURE_NAMES, LIVE_TRAINING_META_PATH, SCALER_PATH, TRAINED_MODEL_PATH, WINDOW_SIZE
-from .model import PreChaosTransformer
+from .config import FEATURE_NAMES, LIVE_TRAINING_META_PATH, MODEL_ROOT, SCALER_PATH, TRAINED_MODEL_PATH, WINDOW_SIZE
+from .feature_engineering import build_feature_matrix, sanitize_events, validate_feature_vector
+from .model import build_classifier
+from .security import safe_joblib_dump, safe_write_text, write_artifact_manifest
 
 
 @dataclass
@@ -45,12 +43,15 @@ def _load_dataset(dataset_path: Path) -> list[dict]:
             if row and row[0]:
                 records.append({header[index]: row[index] for index in range(len(header))})
         return records
-    raise ValueError("Supported dataset formats are JSON and XLSX.")
+    raise ValueError("Supported dataset formats are JSON, JSONL, and XLSX.")
 
 
 def _engineer_features(row: dict) -> np.ndarray:
     if "features" in row and row["features"] is not None:
-        return np.asarray(row["features"], dtype=np.float32)
+        return np.asarray(validate_feature_vector(row["features"]), dtype=np.float32)
+    if "events" in row and row["events"] is not None:
+        feature_matrix = build_feature_matrix(sanitize_events(row["events"]))
+        return np.asarray(feature_matrix[-1], dtype=np.float32)
     if "subject" in row:
         hold_values = np.array(
             [float(value) for key, value in row.items() if str(key).startswith("H.") and value is not None],
@@ -79,7 +80,12 @@ def _engineer_features(row: dict) -> np.ndarray:
         mouse_speed = 0.0
         tab_switch = max(float(row.get("rep", 1)) - 1.0, 0.0) / 50.0
         session_duration = float(row.get("rep", 1)) / 5.0
-        fatigue_score = float(np.clip(variation / max(hold_mean, 1e-4), 0.0, 1.0))
+        explicit_fatigue = row.get("fatigue_score")
+        fatigue_score = (
+            float(explicit_fatigue)
+            if explicit_fatigue not in (None, "")
+            else float(np.clip(variation / max(hold_mean, 1e-4), 0.0, 1.0))
+        )
         return np.array(
             [
                 typing_speed,
@@ -124,40 +130,102 @@ def _engineer_features(row: dict) -> np.ndarray:
     )
 
 
-def _group_sequences(records: Iterable[dict]) -> tuple[np.ndarray, np.ndarray]:
+def _sort_key(record: dict) -> tuple[float, str]:
+    try:
+        timestamp = float(record.get("timestamp") or 0.0)
+    except (TypeError, ValueError):
+        timestamp = 0.0
+    return (timestamp, str(record.get("session_id", "")))
+
+
+def _build_labeled_samples(records: Iterable[dict]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     by_subject: dict[str, list[np.ndarray]] = {}
     by_session: dict[str, list[np.ndarray]] = {}
-    for record in records:
+    for record in sorted(records, key=_sort_key):
+        if "prediction" in record:
+            raise ValueError("Dataset contains prediction fields. Refusing to train on contaminated records.")
         subject_id = str(record.get("user_id", record.get("subject", "unknown")))
         session_id = str(record.get("session_id", record.get("sessionIndex", "0")))
         features = _engineer_features(record)
         by_subject.setdefault(subject_id, []).append(features)
         by_session.setdefault(f"{subject_id}:{session_id}", []).append(features)
 
-    sequences: list[np.ndarray] = []
-    labels: list[int] = []
+    sample_vectors: list[np.ndarray] = []
+    sample_labels: list[int] = []
+    sample_sessions: list[str] = []
+    session_samples: list[tuple[str, list[np.ndarray], float]] = []
+    session_scores: list[float] = []
+
     for session_key, samples in by_session.items():
         if len(samples) < WINDOW_SIZE:
             continue
         matrix = np.stack(samples)
         subject_id = session_key.split(":", 1)[0]
         subject_baseline = np.stack(by_subject[subject_id]).mean(axis=0)
-        window_scores: list[float] = []
+
         windows: list[np.ndarray] = []
+        window_scores: list[float] = []
         for start in range(0, len(matrix) - WINDOW_SIZE + 1):
             window = matrix[start : start + WINDOW_SIZE]
+            windows.append(window[-1].astype(np.float32))
             instability = float(np.mean(np.linalg.norm(window - subject_baseline, axis=1)))
-            windows.append(window)
             window_scores.append(instability)
+
         if not window_scores:
             continue
-        threshold = float(np.quantile(window_scores, 0.65))
-        for window, instability in zip(windows, window_scores):
-            sequences.append(window)
-            labels.append(1 if instability >= threshold else 0)
-    if not sequences:
-        raise ValueError("Dataset did not produce any valid sequences of length 30.")
-    return np.stack(sequences), np.asarray(labels, dtype=np.float32)
+
+        session_score = float(np.median(window_scores))
+        session_samples.append((session_key, windows, session_score))
+        session_scores.append(session_score)
+
+    if not session_samples:
+        raise ValueError(f"Dataset did not produce any valid sessions with at least {WINDOW_SIZE} samples.")
+
+    threshold = float(np.median(session_scores))
+    for session_key, windows, session_score in session_samples:
+        session_label = 1 if session_score >= threshold else 0
+        for window_vector in windows:
+            sample_vectors.append(window_vector)
+            sample_labels.append(session_label)
+            sample_sessions.append(session_key)
+
+    return (
+        np.stack(sample_vectors),
+        np.asarray(sample_labels, dtype=np.int32),
+        np.asarray(sample_sessions, dtype=object),
+    )
+
+
+def _split_by_session(
+    features: np.ndarray,
+    labels: np.ndarray,
+    session_ids: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    unique_sessions, first_indices = np.unique(session_ids, return_index=True)
+    if len(unique_sessions) < 2:
+        raise ValueError("At least two sessions are required to create a train/validation split.")
+    session_labels = labels[first_indices]
+    stratify = session_labels if len(np.unique(session_labels)) > 1 else None
+
+    train_sessions, val_sessions = train_test_split(
+        unique_sessions,
+        test_size=0.2,
+        random_state=42,
+        stratify=stratify,
+    )
+    train_mask = np.isin(session_ids, train_sessions)
+    val_mask = np.isin(session_ids, val_sessions)
+    if not np.any(train_mask) or not np.any(val_mask):
+        raise ValueError("Training split failed to produce both train and validation samples.")
+
+    return (
+        features[train_mask],
+        features[val_mask],
+        labels[train_mask],
+        labels[val_mask],
+        train_sessions,
+        val_sessions,
+    )
 
 
 def train_from_dataset(
@@ -166,42 +234,23 @@ def train_from_dataset(
     batch_size: int = 32,
     learning_rate: float = 1e-3,
 ) -> TrainingArtifacts:
+    # Epochs, batch_size, and learning_rate remain accepted for API compatibility.
+    _ = (epochs, batch_size, learning_rate)
+
     dataset_path = Path(dataset_file).expanduser().resolve()
     records = _load_dataset(dataset_path)
-    sequences, labels = _group_sequences(records)
+    features, labels, session_ids = _build_labeled_samples(records)
+    X_train, X_val, y_train, y_val, train_sessions, val_sessions = _split_by_session(features, labels, session_ids)
+
     scaler = StandardScaler()
-    flattened = sequences.reshape(-1, len(FEATURE_NAMES))
-    scaled = scaler.fit_transform(flattened).reshape(-1, WINDOW_SIZE, len(FEATURE_NAMES))
-    X_train, X_val, y_train, y_val = train_test_split(
-        scaled, labels, test_size=0.2, random_state=42, stratify=labels
-    )
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
 
-    train_loader = DataLoader(
-        TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32)),
-        batch_size=batch_size,
-        shuffle=True,
-    )
-    val_X = torch.tensor(X_val, dtype=torch.float32)
-    val_y = torch.tensor(y_val, dtype=torch.float32)
+    model = build_classifier()
+    model.fit(X_train_scaled, y_train)
 
-    model = PreChaosTransformer(feature_dim=len(FEATURE_NAMES))
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-    for _ in range(epochs):
-        model.train()
-        for batch_X, batch_y in train_loader:
-            optimizer.zero_grad()
-            logits, _ = model(batch_X)
-            loss = criterion(logits, batch_y)
-            loss.backward()
-            optimizer.step()
-
-    model.eval()
-    with torch.no_grad():
-        logits, _ = model(val_X)
-        probs = torch.sigmoid(logits).numpy()
-    preds = (probs >= 0.5).astype(np.float32)
+    probs = model.predict_proba(X_val_scaled)[:, 1]
+    preds = (probs >= 0.5).astype(np.int32)
     metrics = {
         "accuracy": round(float(accuracy_score(y_val, preds)), 4),
         "precision": round(float(precision_score(y_val, preds, zero_division=0)), 4),
@@ -210,23 +259,28 @@ def train_from_dataset(
         "confusion_matrix": confusion_matrix(y_val, preds).tolist(),
         "train_samples": int(len(X_train)),
         "validation_samples": int(len(X_val)),
+        "train_sessions": int(len(train_sessions)),
+        "validation_sessions": int(len(val_sessions)),
+        "model": "logistic_regression",
     }
 
-    TRAINED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), TRAINED_MODEL_PATH)
-    joblib.dump(scaler, SCALER_PATH)
-    LIVE_TRAINING_META_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LIVE_TRAINING_META_PATH.write_text(
-        json.dumps(
-            {
-                "last_trained_at": str(np.datetime64("now")),
-                "metrics": metrics,
-                "dataset_path": str(dataset_path),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    safe_joblib_dump(model, TRAINED_MODEL_PATH, managed_root=MODEL_ROOT)
+    safe_joblib_dump(scaler, SCALER_PATH, managed_root=MODEL_ROOT)
+
+    training_metadata = {
+        "last_trained_at": str(np.datetime64("now")),
+        "metrics": metrics,
+        "dataset_file": dataset_path.name,
+        "session_count": len(np.unique(session_ids)),
+        "model_type": "logistic_regression",
+        "feature_count": len(FEATURE_NAMES),
+    }
+    write_artifact_manifest(
+        model_path=TRAINED_MODEL_PATH,
+        scaler_path=SCALER_PATH,
+        metadata=training_metadata,
     )
+    safe_write_text(LIVE_TRAINING_META_PATH, json.dumps(training_metadata, indent=2), managed_root=LIVE_TRAINING_META_PATH.parent)
 
     return TrainingArtifacts(
         model_path=str(TRAINED_MODEL_PATH),

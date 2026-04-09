@@ -1,4 +1,5 @@
 import { Minus, Square, X } from 'lucide-react'
+import appIcon from '../../../../app-icon.png'
 
 export default function TitleBar({ minimal = false }: { minimal?: boolean }) {
   return (
@@ -9,7 +10,7 @@ export default function TitleBar({ minimal = false }: { minimal?: boolean }) {
       <div className="flex items-center gap-2">
         {!minimal && (
           <>
-            <span className="text-lg text-[var(--nv-primary)]">&#x2B21;</span>
+            <img src={appIcon} alt="Netherite" className="h-5 w-5 object-contain" />
             <span className="text-sm font-semibold text-[var(--nv-foreground)]">Netherite</span>
           </>
         )}

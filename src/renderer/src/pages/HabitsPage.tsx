@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Flame, Check, Plus, Trash2, Edit2, X, Star, Target } from 'lucide-react'
-import { useHabits, Habit, updateScraps, scrapRewardForDifficulty } from '@/hooks/use-data'
+import { Check, Edit2, Flame, Plus, SkipForward, Star, Target, Trash2, X } from 'lucide-react'
+
+import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
+import { Habit, scrapRewardForDifficulty, updateScraps, useHabits, useTodoMomentumContext } from '@/hooks/use-data'
+import {
+  createHabitWithPermanenceDefaults,
+  getHabitContextMessage,
+  getHabitPermanenceTier,
+  getHabitPermanenceTierWidth,
+  getWeakHabitDayContext,
+  recomputeHabitPermanence,
+  recordHabitEvent
+} from '@/habits/permanence'
 import { getLocalToday } from '@/lib/date'
 import { emitPreChaosAppEvent } from '@/prechaos/app-events'
 
 export default function HabitsPage() {
   const [habits, setHabits] = useHabits()
+  const [, setTodoMomentumContext] = useTodoMomentumContext()
   const [isAdding, setIsAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
 
@@ -22,17 +34,31 @@ export default function HabitsPage() {
       label: 'Opened the habits workspace',
       importance: 'medium'
     })
-  }, [])
+
+    setTodoMomentumContext((current) =>
+      current.weak_habit_day && current.weak_habit_day_date !== todayStr
+        ? { weak_habit_day: false, weak_habit_day_date: todayStr }
+        : current
+    )
+  }, [setTodoMomentumContext, todayStr])
+
+  const resetForm = () => {
+    setTitle('')
+    setDescription('')
+    setDifficulty(1)
+    setIsAdding(false)
+    setEditingId(null)
+  }
 
   const handleSave = () => {
     if (!title.trim()) return
 
     if (editingId) {
-      setHabits(prev => prev.map(h => 
-        h.id === editingId 
-          ? { ...h, title, description, difficulty } 
-          : h
-      ))
+      setHabits((prev) =>
+        prev.map((habit) =>
+          habit.id === editingId ? { ...habit, title, description, difficulty } : habit
+        )
+      )
       emitPreChaosAppEvent({
         source: 'habits',
         action: 'habit_updated',
@@ -40,15 +66,19 @@ export default function HabitsPage() {
         importance: 'medium'
       })
     } else {
-      const newHabit: Habit = {
+      const newHabit = createHabitWithPermanenceDefaults({
         id: crypto.randomUUID(),
         title,
         description,
         difficulty,
         completedDates: [],
         createdAt: Date.now()
-      }
-      setHabits(prev => [...prev, newHabit])
+      })
+      setHabits((prev) => {
+        const nextHabits = [...prev, newHabit]
+        setTodoMomentumContext(getWeakHabitDayContext(nextHabits, todayStr))
+        return nextHabits
+      })
       emitPreChaosAppEvent({
         source: 'habits',
         action: 'habit_created',
@@ -58,14 +88,6 @@ export default function HabitsPage() {
     }
 
     resetForm()
-  }
-
-  const resetForm = () => {
-    setTitle('')
-    setDescription('')
-    setDifficulty(1)
-    setIsAdding(false)
-    setEditingId(null)
   }
 
   const startEdit = (habit: Habit) => {
@@ -78,65 +100,106 @@ export default function HabitsPage() {
 
   const deleteHabit = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setHabits(prev => prev.filter(h => h.id !== id))
+    setHabits((prev) => {
+      const nextHabits = prev.filter((habit) => habit.id !== id)
+      setTodoMomentumContext(getWeakHabitDayContext(nextHabits, todayStr))
+      return nextHabits
+    })
+  }
+
+  const applyHabitEvent = (id: string, action: 'completed' | 'skipped' | 'unchecked', diff: number) => {
+    const eventTime = new Date()
+
+    setHabits((prev) => {
+      const nextHabits = prev.map((habit) => {
+        const baseHabit = createHabitWithPermanenceDefaults(habit)
+
+        if (habit.id === id) {
+          return recordHabitEvent(baseHabit, {
+            action,
+            today: todayStr,
+            now: eventTime
+          })
+        }
+
+        return recomputeHabitPermanence(baseHabit, {
+          today: todayStr
+        })
+      })
+
+      setTodoMomentumContext(getWeakHabitDayContext(nextHabits, todayStr))
+      return nextHabits
+    })
+
+    if (action === 'completed') {
+      updateScraps(scrapRewardForDifficulty(diff))
+      emitPreChaosAppEvent({
+        source: 'habits',
+        action: 'habit_checked',
+        label: 'Completed a habit check-in',
+        importance: 'high'
+      })
+    }
+
+    if (action === 'unchecked') {
+      updateScraps(-scrapRewardForDifficulty(diff))
+    }
   }
 
   const toggleHabit = (id: string, diff: number) => {
-    setHabits(prev => prev.map(h => {
-      if (h.id === id) {
-        const isCompleted = h.completedDates.includes(todayStr)
-        if (isCompleted) {
-          updateScraps(-scrapRewardForDifficulty(diff))
-          return { ...h, completedDates: h.completedDates.filter(d => d !== todayStr) }
-        } else {
-          updateScraps(scrapRewardForDifficulty(diff))
-          emitPreChaosAppEvent({
-            source: 'habits',
-            action: 'habit_checked',
-            label: 'Completed a habit check-in',
-            importance: 'high'
-          })
-          return { ...h, completedDates: [...h.completedDates, todayStr] }
-        }
-      }
-      return h
-    }))
+    const targetHabit = habits.find((habit) => habit.id === id)
+    if (!targetHabit) return
+
+    const isCompleted = targetHabit.completedDates.includes(todayStr)
+    applyHabitEvent(id, isCompleted ? 'unchecked' : 'completed', diff)
+  }
+
+  const skipHabit = (id: string, diff: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const targetHabit = habits.find((habit) => habit.id === id)
+    if (!targetHabit || targetHabit.completedDates.includes(todayStr)) {
+      return
+    }
+
+    applyHabitEvent(id, 'skipped', diff)
   }
 
   const sortedHabits = useMemo(() => {
-    return [...habits].sort((a, b) => {
-      const aCompleted = a.completedDates.includes(todayStr)
-      const bCompleted = b.completedDates.includes(todayStr)
-      
-      if (aCompleted && !bCompleted) return 1
-      if (!aCompleted && bCompleted) return -1
-      
-      if (a.difficulty !== b.difficulty) return b.difficulty - a.difficulty
-      return b.createdAt - a.createdAt
-    })
+    return habits
+      .map((habit) => createHabitWithPermanenceDefaults(habit))
+      .sort((left, right) => {
+        const leftCompleted = left.completedDates.includes(todayStr)
+        const rightCompleted = right.completedDates.includes(todayStr)
+
+        if (leftCompleted && !rightCompleted) return 1
+        if (!leftCompleted && rightCompleted) return -1
+
+        if (left.difficulty !== right.difficulty) return right.difficulty - left.difficulty
+        return right.createdAt - left.createdAt
+      })
   }, [habits, todayStr])
 
-  const renderStars = (count: number = 0, interactive = false, onClick?: (n: number) => void) => {
-    return (
-      <div className="flex gap-1">
-        {[...Array(5)].map((_, i) => (
-          <button 
-            key={i}
-            type="button"
-            className={`${interactive ? 'cursor-pointer hover:scale-110 transition-transform' : 'cursor-default'}`}
-            onClick={(e) => {
-              if (interactive && onClick) {
-                e.preventDefault()
-                onClick(i + 1)
-              }
-            }}
-          >
-            <Star className={`w-3 h-3 ${i < count ? 'fill-[var(--nv-primary)] text-[var(--nv-primary)]' : 'text-[var(--nv-subtle)]'}`} />
-          </button>
-        ))}
-      </div>
-    )
-  }
+  const renderStars = (count = 0, interactive = false, onClick?: (value: number) => void) => (
+    <div className="flex gap-1">
+      {[...Array(5)].map((_, index) => (
+        <button
+          key={index}
+          type="button"
+          className={interactive ? 'cursor-pointer hover:scale-110 transition-transform' : 'cursor-default'}
+          onClick={(e) => {
+            if (interactive && onClick) {
+              e.preventDefault()
+              onClick(index + 1)
+            }
+          }}
+        >
+          <Star
+            className={`w-3 h-3 ${index < count ? 'fill-[var(--nv-primary)] text-[var(--nv-primary)]' : 'text-[var(--nv-subtle)]'}`}
+          />
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div className="flex w-full min-h-screen bg-[var(--nv-bg)]">
@@ -155,7 +218,7 @@ export default function HabitsPage() {
           </button>
         </nav>
         <div className="mt-auto">
-          <button 
+          <button
             onClick={() => setIsAdding(true)}
             className="w-full py-3 bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] hover:bg-[var(--nv-primary-soft-strong)] rounded-lg text-sm font-bold transition-all active:scale-95 uppercase tracking-widest"
           >
@@ -165,35 +228,33 @@ export default function HabitsPage() {
       </aside>
 
       <main className="flex-1 flex flex-col p-8 md:p-16 max-w-7xl mx-auto h-full">
-        {/* Header */}
         <header className="flex items-start justify-between mb-8 w-full">
           <div>
-            <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-subtle)] mb-1">Resets at midnight</p>
-            <h1 className="text-4xl font-extrabold text-[var(--nv-secondary)] font-headline">
-              Habits
-            </h1>
+            <p className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-subtle)] mb-1">
+              Resets at midnight
+            </p>
+            <h1 className="text-4xl font-extrabold text-[var(--nv-secondary)] font-headline">Habits</h1>
           </div>
         </header>
 
-        {/* Content Box */}
         <div className="w-full">
-          
-          {/* Add/Edit Form */}
           {isAdding && (
             <div className="mb-8 p-6 bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-[8px] relative">
-              <button 
+              <button
                 onClick={resetForm}
                 className="absolute top-4 right-4 text-[var(--nv-subtle)] hover:text-white transition-colors bg-transparent border-none"
               >
                 <X className="w-5 h-5" />
               </button>
-              <h2 className="text-lg font-bold text-white mb-6 uppercase tracking-widest">{editingId ? 'Edit Habit' : 'Create New Habit'}</h2>
-              
+              <h2 className="text-lg font-bold text-white mb-6 uppercase tracking-widest">
+                {editingId ? 'Edit Habit' : 'Create New Habit'}
+              </h2>
+
               <div className="space-y-6">
                 <div>
                   <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-2">Title</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder="e.g. Read 10 pages"
@@ -202,9 +263,11 @@ export default function HabitsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-2">Description (Optional)</label>
-                  <input 
-                    type="text" 
+                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-2">
+                    Description (Optional)
+                  </label>
+                  <input
+                    type="text"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="e.g. Before bed"
@@ -212,7 +275,9 @@ export default function HabitsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-3">Difficulty & Reward</label>
+                  <label className="block text-xs uppercase tracking-widest font-bold text-[var(--nv-subtle)] mb-3">
+                    Difficulty & Reward
+                  </label>
                   <div className="flex items-center gap-4 bg-[var(--nv-bg)] p-4 rounded border border-[var(--nv-border)] w-fit">
                     {renderStars(difficulty, true, setDifficulty)}
                     <div className="w-px h-6 bg-[var(--nv-border)]" />
@@ -222,13 +287,13 @@ export default function HabitsPage() {
                   </div>
                 </div>
                 <div className="pt-4 flex justify-end gap-4 border-t border-[var(--nv-border)]">
-                  <button 
+                  <button
                     onClick={resetForm}
                     className="bg-transparent border border-[var(--nv-border)] text-[var(--nv-subtle)] hover:border-[var(--nv-primary)] hover:text-white px-6 py-2 rounded-[4px] font-medium text-sm transition-all"
                   >
                     Cancel
                   </button>
-                  <button 
+                  <button
                     onClick={handleSave}
                     disabled={!title.trim()}
                     className="bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] hover:bg-[var(--nv-primary-soft-strong)] disabled:opacity-50 px-6 py-2 rounded-lg font-bold text-sm transition-all uppercase tracking-widest"
@@ -240,60 +305,92 @@ export default function HabitsPage() {
             </div>
           )}
 
-          {/* List */}
           <div className="space-y-4">
             {sortedHabits.length > 0 ? (
-              sortedHabits.map(habit => {
+              sortedHabits.map((habit) => {
                 const isCompleted = habit.completedDates.includes(todayStr)
+                const permanenceScore = habit.permanence_score ?? 0
+                const tier = getHabitPermanenceTier(permanenceScore)
+                const message = getHabitContextMessage(habit, todayStr)
+
                 return (
-                  <div 
-                    key={habit.id} 
+                  <div
+                    key={habit.id}
                     className={`group flex items-center justify-between p-6 bg-[var(--nv-surface)] border rounded-[8px] transition-all cursor-pointer hover:border-[var(--nv-primary)] hover:shadow-[0_0_20px_var(--nv-primary-glow)] ${
                       isCompleted ? 'border-[var(--nv-border)] opacity-40' : 'border-[var(--nv-border)]'
                     }`}
                     onClick={() => toggleHabit(habit.id, habit.difficulty)}
                   >
                     <div className="flex items-center gap-6 w-full">
-                      {/* Custom Checkbox */}
-                      <div className={`w-6 h-6 shrink-0 flex items-center justify-center transition-colors rounded-[2px] ${
-                        isCompleted 
-                          ? 'border-[var(--nv-primary)] bg-[var(--nv-primary)]' 
-                          : 'border border-[var(--nv-border)] group-hover:border-[var(--nv-primary)]'
-                      }`}>
+                      <div
+                        className={`w-6 h-6 shrink-0 flex items-center justify-center transition-colors rounded-[2px] ${
+                          isCompleted
+                            ? 'border-[var(--nv-primary)] bg-[var(--nv-primary)]'
+                            : 'border border-[var(--nv-border)] group-hover:border-[var(--nv-primary)]'
+                        }`}
+                      >
                         {isCompleted && <Check className="w-4 h-4 text-white font-bold" strokeWidth={3} />}
                       </div>
 
-                      {/* Info Formatter */}
                       <div className="flex-1 min-w-0">
                         <h3 className={`font-semibold text-sm transition-colors decoration-2 ${isCompleted ? 'text-white line-through' : 'text-white'}`}>
                           {habit.title}
                         </h3>
-                        {habit.description && (
-                          <p className="text-xs text-[var(--nv-subtle)] mt-1 truncate">
-                            {habit.description}
+                        {habit.description && <p className="text-xs text-[var(--nv-subtle)] mt-1 truncate">{habit.description}</p>}
+                        <div className="mt-3">{renderStars(habit.difficulty)}</div>
+
+                        <div className="mt-4">
+                          <div className="flex items-center justify-between text-[0.55rem] uppercase tracking-[0.22em] font-bold text-[var(--nv-subtle)] mb-2">
+                            <span>Forming</span>
+                            <span>Consolidating</span>
+                            <span>Permanent</span>
+                          </div>
+                          <div className="relative h-[3px] overflow-hidden rounded-full bg-[var(--nv-bg)] border border-[var(--nv-border)]/70">
+                            <div
+                              className="absolute inset-y-0 left-0 bg-[var(--nv-primary)] transition-all duration-300"
+                              style={{ width: getHabitPermanenceTierWidth(permanenceScore) }}
+                            />
+                            <div className="absolute inset-0 grid grid-cols-3 gap-px">
+                              <div className="border-r border-[var(--nv-border)]/70" />
+                              <div className="border-r border-[var(--nv-border)]/70" />
+                              <div />
+                            </div>
+                          </div>
+                          <p className="mt-2 text-[0.65rem] uppercase tracking-[0.22em] font-bold text-[var(--nv-secondary)]">
+                            {tier}
                           </p>
-                        )}
-                        <div className="mt-3">
-                            {renderStars(habit.difficulty)}
+                          {message && <p className="mt-2 text-xs text-[var(--nv-subtle)]">{message}</p>}
                         </div>
                       </div>
                     </div>
 
-                    {/* Right Side: Reward & Actions */}
                     <div className="flex items-center gap-6 shrink-0">
                       <div className="flex flex-col items-end justify-center h-full">
-                        <span className="text-[0.6rem] font-bold text-[var(--nv-secondary)] uppercase">+{scrapRewardForDifficulty(habit.difficulty)} 🔩</span>
+                        <span className="text-[0.6rem] font-bold text-[var(--nv-secondary)] uppercase flex items-center gap-1">
+                          +{scrapRewardForDifficulty(habit.difficulty)} <NetheriteScrapIcon size={10} />
+                        </span>
                       </div>
-                      
-                      {/* Hover Actions */}
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); startEdit(habit); }}
+
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                        {!isCompleted && (
+                          <button
+                            onClick={(e) => skipHabit(habit.id, habit.difficulty, e)}
+                            className="flex items-center gap-1 h-8 px-3 justify-center rounded-[4px] border border-[var(--nv-border)] bg-transparent text-[var(--nv-subtle)] transition-colors hover:border-[var(--nv-secondary)] hover:text-white"
+                          >
+                            <SkipForward className="w-3.5 h-3.5" />
+                            <span className="text-[0.6rem] uppercase tracking-[0.18em] font-bold">Skip</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            startEdit(habit)
+                          }}
                           className="flex h-8 w-8 items-center justify-center rounded-[4px] border border-[var(--nv-border)] bg-transparent text-[var(--nv-subtle)] transition-colors hover:border-[var(--nv-primary)] hover:text-white"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
-                        <button 
+                        <button
                           onClick={(e) => deleteHabit(habit.id, e)}
                           className="flex h-8 w-8 items-center justify-center rounded-[4px] border border-[var(--nv-border)] bg-transparent text-[var(--nv-subtle)] transition-colors hover:border-[var(--nv-danger)] hover:bg-[var(--nv-danger-soft)] hover:text-[var(--nv-danger)]"
                         >
@@ -308,8 +405,10 @@ export default function HabitsPage() {
               <div className="text-center py-20 border border-dashed border-[var(--nv-border)] bg-[var(--nv-surface)] rounded-[8px]">
                 <Flame className="w-12 h-12 text-[var(--nv-danger)] mx-auto mb-4" />
                 <h3 className="text-lg font-bold text-white mb-2">No habits yet</h3>
-                <p className="text-[var(--nv-subtle)] text-sm mb-6 max-w-sm mx-auto">Create daily habits to earn scraps and unlock new items.</p>
-                <button 
+                <p className="text-[var(--nv-subtle)] text-sm mb-6 max-w-sm mx-auto">
+                  Create daily habits to earn scraps and unlock new items.
+                </p>
+                <button
                   onClick={() => setIsAdding(true)}
                   className="bg-[var(--nv-primary-soft)] text-[var(--nv-primary)] hover:bg-[var(--nv-primary-soft-strong)] px-6 py-2 rounded-lg font-bold text-sm transition-all uppercase tracking-widest"
                 >
@@ -318,7 +417,6 @@ export default function HabitsPage() {
               </div>
             )}
           </div>
-
         </div>
       </main>
     </div>

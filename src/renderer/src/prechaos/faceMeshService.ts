@@ -1,11 +1,47 @@
 import type { WebcamMetrics, WebcamState } from './types'
 import { usePreChaosStore } from './store'
 import { WEBCAM_NEUTRAL_FATIGUE_SCORE, WEBCAM_WARMUP_TIMEOUT_MS } from './webcam-status'
-
-type Landmark = { x: number; y: number; z?: number }
-type FaceMeshResults = {
-  multiFaceLandmarks?: Landmark[][]
-}
+import {
+  type Landmark,
+  type FaceMeshResults,
+  clamp,
+  distance,
+  normalizePoint,
+  averageLandmark,
+  computeEAR,
+  isSmiling,
+  getHeadPose,
+  getMouthOpening,
+  pickPoints,
+  EAR_THRESHOLD,
+  CONSEC_FRAMES,
+  PERCLOS_WINDOW_MS,
+  PERCLOS_THRESHOLD,
+  HEAD_POSE_YAW_THRESHOLD,
+  HEAD_POSE_PITCH_THRESHOLD,
+  YAWN_MOUTH_OPENING_THRESHOLD,
+  YAWN_SUSTAINED_MS,
+  FATIGUE_RISE_ALPHA,
+  FATIGUE_FALL_ALPHA,
+  SMILE_WIDTH_THRESHOLD,
+  BLINK_THRESHOLD,
+  MEDIAPIPE_VERSION,
+  EAR_SMOOTHING_WINDOW_MESH,
+  BLINK_RESET_FRAMES_MESH,
+  LEFT_EYE_EAR,
+  RIGHT_EYE_EAR,
+  LEFT_EYE_OUTLINE,
+  RIGHT_EYE_OUTLINE,
+  FACE_OVAL,
+  NOSE_TIP,
+  NOSE_TIP_FALLBACK,
+  MOUTH_CENTER_UPPER,
+  MOUTH_CENTER_LOWER,
+  MOUTH_UPPER_LIP,
+  MOUTH_LOWER_LIP,
+  MOUTH_CORNER_LEFT,
+  MOUTH_CORNER_RIGHT,
+} from './faceAnalysis'
 
 type FaceMeshInstance = {
   setOptions: (options: Record<string, unknown>) => void
@@ -37,34 +73,19 @@ declare global {
   var __netheriteFaceMeshService: FaceMeshService | undefined
 }
 
-const EAR_THRESHOLD = 0.25
-const CONSEC_FRAMES = 40
-const EAR_SMOOTHING_WINDOW = 3
-const BLINK_THRESHOLD = 0.21
-const BLINK_REFRACTORY_MS = 180
-const PROCESS_FPS_HIGH = 18
-const PROCESS_FPS_LOW = 5
+const PROCESS_FPS_HIGH = 14
+const PROCESS_FPS_LOW = 4
+const PROCESS_FPS_HIGH_REDUCED = 10
+const PROCESS_FPS_LOW_REDUCED = 3
 const CAMERA_MODULE_EMIT_INTERVAL_MS = 80
 const BACKGROUND_EMIT_INTERVAL_MS = 600
-const CAMERA_MODULE_PREVIEW_CAPTURE_MS = 100
-const HUD_PREVIEW_CAPTURE_MS = 220
-const PREVIEW_MAX_WIDTH = 480
+const CAMERA_MODULE_PREVIEW_CAPTURE_MS = 140
+const HUD_PREVIEW_CAPTURE_MS = 280
+const PREVIEW_MAX_WIDTH = 420
 const IDLE_SHUTDOWN_MS = 5_000
 const MAX_CONSECUTIVE_SEND_FAILURES = 8
-const MEDIAPIPE_VERSION = '0.4.1633559619'
-const FATIGUE_RISE_ALPHA = 0.02
-const FATIGUE_FALL_ALPHA = 0.08
-const SMILE_WIDTH_THRESHOLD = 0.45
-
-const LEFT_EYE_EAR = [33, 160, 158, 133, 153, 144]
-const RIGHT_EYE_EAR = [362, 385, 387, 263, 373, 380]
-const LEFT_EYE_OUTLINE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161]
-const RIGHT_EYE_OUTLINE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384]
-const FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
-const MOUTH_CORNER_LEFT = 61
-const MOUTH_CORNER_RIGHT = 291
-const MOUTH_UPPER_LIP = 0
-const MOUTH_LOWER_LIP = 17
+const MAX_RECOVERY_ATTEMPTS = 4
+const BASE_RECOVERY_DELAY_MS = 1_200
 
 export const DEFAULT_WEBCAM_METRICS: WebcamMetrics = {
   face_presence: 0,
@@ -85,6 +106,9 @@ export const DEFAULT_WEBCAM_METRICS: WebcamMetrics = {
   blink_count: 0,
   low_light: false,
   face_detected: false,
+  head_pose: 'center',
+  perclos: 0,
+  yawn_detected: false,
   fatigue_status: 'No face',
   webcam_risk: 0,
   webcam_state: 'No face',
@@ -92,10 +116,6 @@ export const DEFAULT_WEBCAM_METRICS: WebcamMetrics = {
   notes_state: 'No notes',
   face_box: null
 }
-
-const clamp = (value: number, min = 0, max = 1) => Math.min(Math.max(value, min), max)
-const distance = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y)
-const normalizePoint = (point: Landmark) => ({ x: clamp(point.x), y: clamp(point.y) })
 
 const describeError = (error: unknown) => {
   if (error instanceof DOMException) {
@@ -106,32 +126,6 @@ const describeError = (error: unknown) => {
   }
   return String(error)
 }
-
-const computeEAR = (landmarks: Landmark[], indices: number[]) => {
-  const [p1, p2, p3, p4, p5, p6] = indices.map((index) => landmarks[index])
-  const vertical = distance(p2, p6) + distance(p3, p5)
-  const horizontal = 2 * distance(p1, p4)
-  if (horizontal === 0) return 0
-  return vertical / horizontal
-}
-
-const isSmiling = (landmarks: Landmark[], faceWidth: number) => {
-  if (faceWidth <= 0) {
-    return false
-  }
-
-  const leftCorner = landmarks[MOUTH_CORNER_LEFT]
-  const rightCorner = landmarks[MOUTH_CORNER_RIGHT]
-  const upperLip = landmarks[MOUTH_UPPER_LIP] ?? landmarks[MOUTH_LOWER_LIP]
-  const lowerLip = landmarks[MOUTH_LOWER_LIP] ?? landmarks[MOUTH_UPPER_LIP]
-  if (!leftCorner || !rightCorner || !upperLip || !lowerLip) {
-    return false
-  }
-
-  return distance(leftCorner, rightCorner) / faceWidth >= SMILE_WIDTH_THRESHOLD
-}
-
-const pickPoints = (landmarks: Landmark[], indices: number[]) => indices.map((index) => normalizePoint(landmarks[index]))
 
 const waitForVideoReady = (video: HTMLVideoElement) =>
   new Promise<void>((resolve, reject) => {
@@ -213,7 +207,9 @@ class FaceMeshService {
   private warmupPromise: Promise<void> | null = null
   private warmupResolve: (() => void) | null = null
   private warmupReject: ((error: Error) => void) | null = null
+  private warmupTimer: number | null = null
   private shutdownTimer: number | null = null
+  private restartTimer: number | null = null
   private animationFrame: number | null = null
   private stream: MediaStream | null = null
   private video: HTMLVideoElement | null = null
@@ -221,12 +217,19 @@ class FaceMeshService {
   private previewCanvas: HTMLCanvasElement | null = null
   private lightingCanvas: HTMLCanvasElement | null = null
   private processingFrame = false
+  private recoveryAttemptCount = 0
   private get isCameraModuleOpen(): boolean {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('prechaos-camera-module-open') === 'true'
   }
+  private get isReducedMotionMode(): boolean {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  }
   private get processIntervalMs(): number {
-    return this.isCameraModuleOpen ? (1000 / PROCESS_FPS_HIGH) : (1000 / PROCESS_FPS_LOW)
+    if (this.isCameraModuleOpen) {
+      return 1000 / (this.isReducedMotionMode ? PROCESS_FPS_HIGH_REDUCED : PROCESS_FPS_HIGH)
+    }
+    return 1000 / (this.isReducedMotionMode ? PROCESS_FPS_LOW_REDUCED : PROCESS_FPS_LOW)
   }
   private lastProcessedAt = 0
   private lastEmittedAt = 0
@@ -238,6 +241,8 @@ class FaceMeshService {
   private lastBlinkAt = 0
   private lowEarFrameCount = 0
   private earSamples: number[] = []
+  private eyeClosureHistory: Array<{ timestamp: number; closed: boolean }> = []
+  private yawnStartedAt: number | null = null
   private previousFaceCenter: { x: number; y: number } | null = null
   private latestSnapshot: FaceTrackingSnapshot = {
     status: 'idle',
@@ -260,15 +265,30 @@ class FaceMeshService {
 
   getSnapshot = () => this.latestSnapshot
 
+  private visibilityHandler = () => {
+    if (document.hidden) {
+      if (this.animationFrame !== null) {
+        window.cancelAnimationFrame(this.animationFrame)
+        this.animationFrame = null
+      }
+    } else {
+      if (this.consumerCount > 0 && this.faceMesh && this.video && this.stream) {
+        this.startLoop()
+      }
+    }
+  }
+
   acquire = () => {
     this.consumerCount += 1
     if (this.shutdownTimer !== null) {
       window.clearTimeout(this.shutdownTimer)
       this.shutdownTimer = null
     }
+    document.addEventListener('visibilitychange', this.visibilityHandler)
     void this.ensureRunning()
     return () => {
       this.consumerCount = Math.max(0, this.consumerCount - 1)
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
       if (this.consumerCount === 0) {
         this.scheduleShutdown()
       }
@@ -299,12 +319,56 @@ class FaceMeshService {
     })
   }
 
+  private clearWarmupState(error?: Error) {
+    if (this.warmupTimer !== null) {
+      window.clearTimeout(this.warmupTimer)
+      this.warmupTimer = null
+    }
+
+    const reject = this.warmupReject
+    this.warmupResolve = null
+    this.warmupReject = null
+    this.warmupPromise = null
+
+    if (error && reject) {
+      reject(error)
+    }
+  }
+
+  private releaseResources(warmupError?: Error) {
+    this.clearWarmupState(warmupError)
+
+    if (this.animationFrame !== null) {
+      window.cancelAnimationFrame(this.animationFrame)
+      this.animationFrame = null
+    }
+
+    this.processingFrame = false
+
+    if (this.faceMesh) {
+      this.faceMesh.close?.()
+      this.faceMesh = null
+    }
+
+    if (this.stream) {
+      this.stream.getTracks().forEach((track) => track.stop())
+      this.stream = null
+    }
+
+    if (this.video) {
+      this.video.pause()
+      this.video.srcObject = null
+    }
+  }
+
   private resetMetrics(webcamState: WebcamState, fatigueScore = 0) {
     this.lowEarFrameCount = 0
     this.blinkCount = 0
     this.blinkActive = false
     this.lastBlinkAt = 0
     this.earSamples = []
+    this.eyeClosureHistory = []
+    this.yawnStartedAt = null
     this.previousFaceCenter = null
     this.consecutiveFrameFailures = 0
     this.emit({
@@ -318,11 +382,46 @@ class FaceMeshService {
 
   private movingAverage(value: number) {
     this.earSamples.push(value)
-    if (this.earSamples.length > EAR_SMOOTHING_WINDOW) {
+    if (this.earSamples.length > EAR_SMOOTHING_WINDOW_MESH) {
       this.earSamples.shift()
     }
     const total = this.earSamples.reduce((sum, sample) => sum + sample, 0)
     return total / Math.max(this.earSamples.length, 1)
+  }
+
+  private updatePerclos(now: number, closed: boolean) {
+    this.eyeClosureHistory.push({ timestamp: now, closed })
+    const cutoff = now - PERCLOS_WINDOW_MS
+    while (this.eyeClosureHistory.length > 1 && this.eyeClosureHistory[1].timestamp <= cutoff) {
+      this.eyeClosureHistory.shift()
+    }
+
+    if (this.eyeClosureHistory.length === 0) {
+      return 0
+    }
+
+    const observedStart = Math.max(cutoff, this.eyeClosureHistory[0].timestamp)
+    const windowSpan = now - observedStart
+    if (windowSpan <= 0) {
+      return closed ? 1 : 0
+    }
+
+    let closedMs = 0
+    for (let index = 0; index < this.eyeClosureHistory.length - 1; index += 1) {
+      const current = this.eyeClosureHistory[index]
+      const next = this.eyeClosureHistory[index + 1]
+      if (!current.closed) {
+        continue
+      }
+      closedMs += Math.max(0, next.timestamp - Math.max(current.timestamp, cutoff))
+    }
+
+    const lastSample = this.eyeClosureHistory[this.eyeClosureHistory.length - 1]
+    if (lastSample?.closed) {
+      closedMs += Math.max(0, now - Math.max(lastSample.timestamp, cutoff))
+    }
+
+    return clamp(closedMs / windowSpan)
   }
 
   private capturePreviewFrame() {
@@ -391,6 +490,10 @@ class FaceMeshService {
           return
         }
         settled = true
+        if (this.warmupTimer !== null) {
+          window.clearTimeout(this.warmupTimer)
+          this.warmupTimer = null
+        }
         this.warmupResolve = null
         this.warmupReject = null
         this.warmupPromise = null
@@ -400,7 +503,7 @@ class FaceMeshService {
       this.warmupResolve = () => finish(resolve)
       this.warmupReject = (error: Error) => finish(() => reject(error))
 
-      window.setTimeout(() => {
+      this.warmupTimer = window.setTimeout(() => {
         this.warmupReject?.(new Error(`Face mesh warm-up timed out after ${WEBCAM_WARMUP_TIMEOUT_MS / 1000} seconds`))
       }, WEBCAM_WARMUP_TIMEOUT_MS)
     })
@@ -445,8 +548,10 @@ class FaceMeshService {
         stream: this.stream,
         error: null
       })
+      this.recoveryAttemptCount = 0
     } catch (error) {
-      this.pause()
+      this.releaseResources()
+      this.resetMetrics('blocked', WEBCAM_NEUTRAL_FATIGUE_SCORE)
       this.emit({
         status: 'error',
         webcamState: 'blocked',
@@ -494,13 +599,7 @@ class FaceMeshService {
       if (track) {
         track.contentHint = 'motion'
         track.onended = () => {
-          this.pause()
-          this.emit({
-            status: 'error',
-            webcamState: 'blocked',
-            fatigueScore: WEBCAM_NEUTRAL_FATIGUE_SCORE,
-            error: 'Camera track ended unexpectedly'
-          })
+          this.scheduleRecovery('Camera track ended unexpectedly')
         }
       }
     }
@@ -540,18 +639,23 @@ class FaceMeshService {
     }
 
     const tick = async (now: number) => {
+      if (document.hidden) {
+        this.animationFrame = null
+        return
+      }
+
       if (!this.faceMesh || !this.video || !this.stream) {
         this.animationFrame = null
         return
       }
 
-      this.animationFrame = window.requestAnimationFrame(tick)
-
       if (this.processingFrame || this.video.readyState < 2) {
+        this.animationFrame = window.requestAnimationFrame(tick)
         return
       }
 
       if (now - this.lastProcessedAt < this.processIntervalMs) {
+        this.animationFrame = window.requestAnimationFrame(tick)
         return
       }
 
@@ -564,40 +668,70 @@ class FaceMeshService {
       } catch (error) {
         this.consecutiveFrameFailures += 1
         if (this.consecutiveFrameFailures >= MAX_CONSECUTIVE_SEND_FAILURES) {
-          this.pause()
-          this.emit({
-            status: 'error',
-            webcamState: 'blocked',
-            fatigueScore: WEBCAM_NEUTRAL_FATIGUE_SCORE,
-            error: `Frame processing failed repeatedly: ${describeError(error)}`
-          })
+          this.scheduleRecovery(`Frame processing failed repeatedly: ${describeError(error)}`)
         }
       } finally {
         this.processingFrame = false
+        this.animationFrame = window.requestAnimationFrame(tick)
       }
     }
 
     this.animationFrame = window.requestAnimationFrame(tick)
   }
 
+  private scheduleRecovery(reason: string) {
+    if (this.consumerCount === 0) {
+      this.pause()
+      return
+    }
+
+    if (this.restartTimer !== null) {
+      return
+    }
+
+    if (this.recoveryAttemptCount >= MAX_RECOVERY_ATTEMPTS) {
+      this.releaseResources()
+      this.resetMetrics('blocked', WEBCAM_NEUTRAL_FATIGUE_SCORE)
+      this.emit({
+        status: 'error',
+        webcamState: 'blocked',
+        fatigueScore: WEBCAM_NEUTRAL_FATIGUE_SCORE,
+        stream: null,
+        error: reason
+      })
+      return
+    }
+
+    this.recoveryAttemptCount += 1
+    const delay = Math.min(6_000, BASE_RECOVERY_DELAY_MS * 2 ** (this.recoveryAttemptCount - 1))
+    this.releaseResources(new Error('Face mesh recovery requested'))
+    this.resetMetrics('requesting', WEBCAM_NEUTRAL_FATIGUE_SCORE)
+    this.emit({
+      status: 'starting',
+      webcamState: 'requesting',
+      fatigueScore: WEBCAM_NEUTRAL_FATIGUE_SCORE,
+      stream: null,
+      error: `${reason}. Retrying webcam startup...`
+    })
+
+    this.restartTimer = window.setTimeout(() => {
+      this.restartTimer = null
+      if (this.consumerCount > 0) {
+        void this.ensureRunning()
+      } else {
+        this.pause()
+      }
+    }, delay)
+  }
+
   private pause() {
-    if (this.animationFrame !== null) {
-      window.cancelAnimationFrame(this.animationFrame)
-      this.animationFrame = null
+    if (this.restartTimer !== null) {
+      window.clearTimeout(this.restartTimer)
+      this.restartTimer = null
     }
 
-    this.processingFrame = false
-
-    if (this.stream) {
-      this.stream.getTracks().forEach((track) => track.stop())
-      this.stream = null
-    }
-
-    if (this.video) {
-      this.video.pause()
-      this.video.srcObject = null
-    }
-
+    this.recoveryAttemptCount = 0
+    this.releaseResources(new Error('Face mesh paused'))
     this.resetMetrics('disabled')
     this.emit({
       status: 'paused',
@@ -624,6 +758,8 @@ class FaceMeshService {
     if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
       const ear = this.movingAverage(0)
       const nextRisk = clamp(this.latestSnapshot.metrics.webcam_risk * 0.992)
+      this.eyeClosureHistory = []
+      this.yawnStartedAt = null
 
       this.pushMetrics({
         face_presence: 0,
@@ -644,6 +780,9 @@ class FaceMeshService {
         blink_count: this.blinkCount,
         low_light: lowLight,
         face_detected: false,
+        head_pose: 'center',
+        perclos: 0,
+        yawn_detected: false,
         fatigue_status: 'No face',
         webcam_risk: Number(nextRisk.toFixed(4)),
         webcam_state: 'No face',
@@ -673,7 +812,7 @@ class FaceMeshService {
     const blinkDetectionEar = Math.min(smoothedEar, averageEar)
     const strongBlink = leftClosure > 0.72 || rightClosure > 0.72
 
-    if (!this.blinkActive && (blinkDetectionEar < BLINK_THRESHOLD || strongBlink) && now - this.lastBlinkAt > BLINK_REFRACTORY_MS) {
+    if (!this.blinkActive && (blinkDetectionEar < BLINK_THRESHOLD || strongBlink) && now - this.lastBlinkAt > BLINK_RESET_FRAMES_MESH) {
       this.blinkCount += 1
       this.blinkActive = true
       this.lastBlinkAt = now
@@ -688,6 +827,7 @@ class FaceMeshService {
     const minY = clamp(Math.min(...ys))
     const maxY = clamp(Math.max(...ys))
     const faceWidth = Math.max(maxX - minX, 0.0001)
+    const faceHeight = Math.max(maxY - minY, 0.0001)
     const faceCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
     const movementRaw = this.previousFaceCenter
       ? Math.hypot(faceCenter.x - this.previousFaceCenter.x, faceCenter.y - this.previousFaceCenter.y) * 10
@@ -695,16 +835,40 @@ class FaceMeshService {
     this.previousFaceCenter = faceCenter
     const movement = clamp(movementRaw)
     const smiling = isSmiling(landmarks, faceWidth)
+    const perclos = this.updatePerclos(now, smoothedEar < EAR_THRESHOLD)
+    const headPose = getHeadPose(landmarks, faceWidth, faceHeight)
+    const mouthOpening = getMouthOpening(landmarks, faceHeight)
+    if (mouthOpening >= YAWN_MOUTH_OPENING_THRESHOLD) {
+      this.yawnStartedAt ??= now
+    } else {
+      this.yawnStartedAt = null
+    }
+    const yawnDetected = this.yawnStartedAt !== null && now - this.yawnStartedAt >= YAWN_SUSTAINED_MS
 
-    const drowsy = this.lowEarFrameCount >= CONSEC_FRAMES
+    const eyesClosedForLong = this.lowEarFrameCount >= CONSEC_FRAMES
+    const drowsy = eyesClosedForLong || perclos >= PERCLOS_THRESHOLD || yawnDetected
     const sustainedClosure = clamp((EAR_THRESHOLD - smoothedEar) / EAR_THRESHOLD)
     const lowEarPressure = clamp(this.lowEarFrameCount / CONSEC_FRAMES)
     const movementPenalty = clamp((movement - 0.28) / 0.45)
     const lightingPenalty = lowLight ? 0.08 : 0
     const blinkPenalty = blinkIntensity > 0.72 ? (blinkIntensity - 0.72) * 0.08 : 0
-    const rawRisk = clamp(sustainedClosure * 0.58 + lowEarPressure * 0.3 + movementPenalty * 0.08 + blinkPenalty + lightingPenalty, 0, 1)
+    const perclosPenalty =
+      perclos > PERCLOS_THRESHOLD ? clamp(((perclos - PERCLOS_THRESHOLD) / (1 - PERCLOS_THRESHOLD)) * 0.24, 0, 0.24) : 0
+    const yawnPenalty = yawnDetected ? 0.12 : 0
+    const rawRisk = clamp(
+      sustainedClosure * 0.52 +
+        lowEarPressure * 0.24 +
+        movementPenalty * 0.08 +
+        blinkPenalty +
+        lightingPenalty +
+        perclosPenalty +
+        yawnPenalty,
+      0,
+      1
+    )
     const adjustedRisk = clamp(smiling ? rawRisk * 0.4 : rawRisk, 0, 1)
-    const fatigueTarget = drowsy ? Math.max(adjustedRisk, 0.58) : Math.min(adjustedRisk, 0.5)
+    const fatigueFloor = perclos >= PERCLOS_THRESHOLD ? 0.62 : yawnDetected ? 0.56 : 0.58
+    const fatigueTarget = drowsy ? Math.max(adjustedRisk, fatigueFloor) : Math.min(adjustedRisk, 0.5)
     const previousFatigueScore = this.latestSnapshot.fatigueScore
     const fatigueAlpha = fatigueTarget > previousFatigueScore ? FATIGUE_RISE_ALPHA : FATIGUE_FALL_ALPHA
     const nextFatigueScore = clamp(
@@ -734,6 +898,9 @@ class FaceMeshService {
       blink_count: this.blinkCount,
       low_light: lowLight,
       face_detected: true,
+      head_pose: headPose,
+      perclos: Number(perclos.toFixed(4)),
+      yawn_detected: yawnDetected,
       fatigue_status: drowsy ? 'Drowsy' : 'Alert',
       webcam_risk: Number(nextFatigueScore.toFixed(4)),
       webcam_state: webcamState,

@@ -1,4 +1,5 @@
 export const PRECHAOS_WINDOW_SIZE = 30
+export const PRECHAOS_EVENT_BUFFER_SIZE = 240
 
 export const PRECHAOS_FEATURE_NAMES = [
   'typing_speed',
@@ -15,6 +16,29 @@ export const PRECHAOS_FEATURE_NAMES = [
 export type PreChaosFeatureName = (typeof PRECHAOS_FEATURE_NAMES)[number]
 
 export type PreChaosFeatureVector = number[]
+
+export type PreChaosRawEventType =
+  | 'key_down'
+  | 'mouse_move'
+  | 'route_change'
+  | 'visibility_change'
+  | 'focus'
+  | 'scroll'
+  | 'study_action'
+  | 'webcam_signal'
+
+export type PreChaosRawEvent = {
+  timestamp: number
+  type: PreChaosRawEventType
+  key_class?: 'character' | 'backspace' | 'delete' | 'enter' | 'modifier' | 'navigation' | 'other'
+  route?: string
+  action?: string
+  hidden?: boolean
+  dx?: number
+  dy?: number
+  fatigue_score?: number
+  confidence?: number
+}
 
 export type PreChaosFeedbackLabel = 'focused' | 'thinking' | 'distracted' | 'tired'
 
@@ -58,6 +82,9 @@ export type WebcamMetrics = {
   blink_count: number
   low_light: boolean
   face_detected: boolean
+  head_pose: 'center' | 'left' | 'right' | 'up' | 'down'
+  perclos: number
+  yawn_detected: boolean
   fatigue_status: 'Alert' | 'Drowsy' | 'No face'
   webcam_risk: number
   webcam_state: 'Stable' | 'Watch' | 'Elevated' | 'No face'
@@ -75,8 +102,11 @@ export type CameraModuleDataPulse = {
 }
 
 export type BehaviorEvent = {
+  id: string
   timestamp: number
-  features: PreChaosFeatureVector
+  event: PreChaosRawEvent
+  isStudyContext: boolean
+  writeToDataset: boolean
 }
 
 export type PreChaosContext = {
@@ -110,6 +140,7 @@ export type PreChaosContext = {
 export type PreChaosEvent = {
   id: string
   timestamp: number
+  collectible: boolean
   type:
     | 'route'
     | 'typing'
@@ -140,6 +171,8 @@ export type PreChaosPrediction = {
   status: PreChaosStatus
   state: PreChaosStateLabel
   confidence: number
+  confidence_score: number
+  authority_label: string
   focus_score: number
   fatigue_score: number
   distraction_score: number
@@ -154,6 +187,7 @@ export type PreChaosPrediction = {
   mode: string
   context_summary: string
   page_explanation: string
+  requestId?: string
 }
 
 export type PreChaosBaseline = {
@@ -212,6 +246,41 @@ export type SessionReplay = {
   timeline: SessionReplayPoint[]
 }
 
+export type DailyRhythmHour = {
+  hour: number
+  avg_focus_score: number
+  sample_count: number
+  enough_data: boolean
+}
+
+export type DailyRhythmSummary = {
+  available: boolean
+  session_count: number
+  current_hour: number
+  peak_hour: number | null
+  hours: DailyRhythmHour[]
+}
+
+export type PomodoroPhase = 'idle' | 'studying' | 'break'
+
+export type PomodoroSnapshot = {
+  phase: PomodoroPhase
+  remainingMs: number
+  studyDurationMs: number
+  breakDurationMs: number
+  isRunning: boolean
+  blockExtended: boolean
+  studyBlockStartedAt: number | null
+  targetEndTime: number | null
+}
+
+export type PomodoroAction =
+  | { type: 'start' }
+  | { type: 'pause' }
+  | { type: 'reset' }
+  | { type: 'skipBreak' }
+  | { type: 'takeBreak'; extraBreakMs?: number }
+
 export type CameraModuleSnapshot = {
   windowOpen: boolean
   mode: CameraModuleMode
@@ -227,5 +296,7 @@ export type CameraModuleSnapshot = {
     confidence: number
   } | null
   dataPulse: CameraModuleDataPulse
+  pomodoro: PomodoroSnapshot | null
+  pomodoroAction?: PomodoroAction | null
   updatedAt: number
 }

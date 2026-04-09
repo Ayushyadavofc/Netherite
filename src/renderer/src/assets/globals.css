@@ -16,8 +16,10 @@
   --nv-primary-soft: rgba(255, 86, 37, 0.14);
   --nv-primary-soft-strong: rgba(255, 86, 37, 0.22);
   --nv-primary-glow: rgba(255, 86, 37, 0.35);
+  --nv-primary-contrast: #0b0909;
   --nv-secondary: #ffb77d;
   --nv-secondary-soft: rgba(255, 183, 125, 0.14);
+  --nv-secondary-contrast: #0b0909;
   --nv-danger: #ff5449;
   --nv-danger-soft: rgba(255, 84, 73, 0.16);
   --background: #0a0808;
@@ -27,13 +29,13 @@
   --popover: #141212;
   --popover-foreground: #ffffff;
   --primary: #ff5625;
-  --primary-foreground: #ffffff;
+  --primary-foreground: #0b0909;
   --secondary: #141212;
   --secondary-foreground: #ffffff;
   --muted: #0a0808;
   --muted-foreground: #a8a0a0;
   --accent: #ff5625;
-  --accent-foreground: #ffffff;
+  --accent-foreground: #0b0909;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
   --border: #2a2422;
@@ -48,7 +50,7 @@
   --sidebar: #0a0808;
   --sidebar-foreground: #a8a0a0;
   --sidebar-primary: #ff5625;
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary-foreground: #0b0909;
   --sidebar-accent: #141212;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: #2a2422;
@@ -156,3 +158,15 @@ body {
 .char-step { transition: transform 0.3s steps(3, jump-none); }
 .char-step:hover { transform: translateX(-3px); }
 .char-bounce { animation: char-rocklee-bounce 1.8s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+

@@ -6,15 +6,16 @@ import type {
   PreChaosEvent,
   PredictionHistoryPoint,
   PreChaosBaseline,
-  PreChaosFeatureVector,
   PreChaosPrediction,
+  PreChaosRawEvent,
   PreChaosSidecarState,
   PreChaosStatus,
+  PomodoroSnapshot,
   SessionReplay,
   WebcamMetrics,
   WebcamState
 } from './types'
-import { PRECHAOS_WINDOW_SIZE } from './types'
+import { PRECHAOS_EVENT_BUFFER_SIZE } from './types'
 
 const RECENT_EVENTS_STORAGE_KEY = 'prechaos-recent-events'
 const HISTORY_STORAGE_KEY = 'prechaos-history'
@@ -30,8 +31,20 @@ const loadStoredRecentEvents = (): PreChaosEvent[] => {
     if (!raw) {
       return []
     }
-    const parsed = JSON.parse(raw) as PreChaosEvent[]
-    return Array.isArray(parsed) ? parsed.slice(-120) : []
+    const parsed = JSON.parse(raw) as Array<Partial<PreChaosEvent>>
+    return Array.isArray(parsed)
+      ? parsed
+          .slice(-120)
+          .map((event) => ({
+            id: event.id ?? crypto.randomUUID(),
+            timestamp: typeof event.timestamp === 'number' ? event.timestamp : Date.now(),
+            collectible: event.collectible === true,
+            type: event.type ?? 'route',
+            label: event.label ?? '',
+            route: event.route ?? '/',
+            importance: event.importance ?? 'low'
+          }))
+      : []
   } catch {
     return []
   }
@@ -62,8 +75,19 @@ const loadStoredBehaviorWindow = (): BehaviorEvent[] => {
     if (!raw) {
       return []
     }
-    const parsed = JSON.parse(raw) as BehaviorEvent[]
-    return Array.isArray(parsed) ? parsed.slice(-PRECHAOS_WINDOW_SIZE) : []
+    const parsed = JSON.parse(raw) as Array<Partial<BehaviorEvent>>
+      return Array.isArray(parsed)
+      ? parsed.slice(-PRECHAOS_EVENT_BUFFER_SIZE).map((entry) => ({
+          id: entry.id ?? crypto.randomUUID(),
+          timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : Date.now(),
+          event:
+            entry.event && typeof entry.event === 'object'
+              ? (entry.event as PreChaosRawEvent)
+              : { timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : Date.now(), type: 'focus' },
+          isStudyContext: entry.isStudyContext === true,
+          writeToDataset: entry.writeToDataset === true
+        }))
+      : []
   } catch {
     return []
   }
@@ -111,7 +135,10 @@ const persistBehaviorWindow = (behaviorWindow: BehaviorEvent[]) => {
     return
   }
   try {
-    window.sessionStorage.setItem(BEHAVIOR_WINDOW_STORAGE_KEY, JSON.stringify(behaviorWindow.slice(-PRECHAOS_WINDOW_SIZE)))
+    window.sessionStorage.setItem(
+      BEHAVIOR_WINDOW_STORAGE_KEY,
+      JSON.stringify(behaviorWindow.slice(-PRECHAOS_EVENT_BUFFER_SIZE))
+    )
   } catch {
     // Ignore storage issues and keep the app usable.
   }
@@ -132,10 +159,25 @@ const persistCurrentPrediction = (prediction: PreChaosPrediction | null) => {
   }
 }
 
+const POMODORO_STUDY_DURATION_MS = 25 * 60 * 1000
+const POMODORO_BREAK_DURATION_MS = 5 * 60 * 1000
+
+const defaultPomodoroState: PomodoroSnapshot = {
+  phase: 'idle',
+  remainingMs: POMODORO_STUDY_DURATION_MS,
+  studyDurationMs: POMODORO_STUDY_DURATION_MS,
+  breakDurationMs: POMODORO_BREAK_DURATION_MS,
+  isRunning: false,
+  blockExtended: false,
+  studyBlockStartedAt: null,
+  targetEndTime: null
+}
+
 type PreChaosStore = {
   sidecarState: PreChaosSidecarState
   sidecarReason: string | null
   currentPrediction: PreChaosPrediction | null
+  lastPredictionRequestId: string | null
   baseline: PreChaosBaseline | null
   history: PredictionHistoryPoint[]
   behaviorWindow: BehaviorEvent[]
@@ -145,18 +187,25 @@ type PreChaosStore = {
   sessionStartedAt: number
   studyContextActive: boolean
   webcamEnabled: boolean
+  webcamRecovering: boolean
   webcamOptIn: boolean
   webcamState: WebcamState
   webcamPreviewVisible: boolean
   webcamStream: MediaStream | null
   webcamMetrics: WebcamMetrics
   fatigueScore: number
+  pomodoro: PomodoroSnapshot
   setSidecarState: (state: PreChaosSidecarState, reason?: string | null) => void
-  pushBehavior: (features: PreChaosFeatureVector, timestamp?: number) => void
-  setPrediction: (prediction: PreChaosPrediction, timestamp?: number) => void
+  pushBehavior: (
+    event: PreChaosRawEvent,
+    timestamp?: number,
+    meta?: { isStudyContext?: boolean; writeToDataset?: boolean }
+  ) => void
+  setPrediction: (prediction: PreChaosPrediction, timestamp?: number, requestId?: string) => void
   setBaseline: (baseline: PreChaosBaseline) => void
   setStudyContextActive: (active: boolean) => void
   setWebcamEnabled: (enabled: boolean) => void
+  setWebcamRecovering: (recovering: boolean) => void
   setWebcamOptIn: (enabled: boolean) => void
   setWebcamState: (state: WebcamState) => void
   setWebcamPreviewVisible: (visible: boolean) => void
@@ -166,6 +215,7 @@ type PreChaosStore = {
   setAppContext: (context: Partial<PreChaosContext>) => void
   setSessionReplays: (sessions: SessionReplay[]) => void
   logEvent: (event: Omit<PreChaosEvent, 'id' | 'timestamp'> & { timestamp?: number }) => void
+  setPomodoroState: (update: Partial<PomodoroSnapshot>) => void
 }
 
 const defaultContext: PreChaosContext = {
@@ -215,6 +265,9 @@ const defaultWebcamMetrics: WebcamMetrics = {
   blink_count: 0,
   low_light: false,
   face_detected: false,
+  head_pose: 'center',
+  perclos: 0,
+  yawn_detected: false,
   fatigue_status: 'No face',
   webcam_risk: 0,
   webcam_state: 'No face',
@@ -227,6 +280,7 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
   sidecarState: 'idle',
   sidecarReason: null,
   currentPrediction: loadStoredPrediction(),
+  lastPredictionRequestId: null,
   baseline: null,
   history: loadStoredHistory(),
   behaviorWindow: loadStoredBehaviorWindow(),
@@ -240,6 +294,7 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
   sessionStartedAt: Date.now(),
   studyContextActive: false,
   webcamEnabled: false,
+  webcamRecovering: false,
   webcamOptIn:
     typeof window !== 'undefined' ? window.localStorage.getItem('prechaos-webcam-opt-in') === 'true' : false,
   webcamState: 'disabled',
@@ -248,27 +303,35 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
   webcamStream: null,
   webcamMetrics: defaultWebcamMetrics,
   fatigueScore: 0,
+  pomodoro: { ...defaultPomodoroState },
   setSidecarState: (state, reason = null) => set({ sidecarState: state, sidecarReason: reason }),
-  pushBehavior: (features, timestamp = Date.now()) =>
+  pushBehavior: (event, timestamp = Date.now(), meta) =>
     set((state) => {
-      const nextWindow = [...state.behaviorWindow, { timestamp, features }].slice(-PRECHAOS_WINDOW_SIZE)
+      const nextWindow = [
+        ...state.behaviorWindow,
+        {
+          id: crypto.randomUUID(),
+          timestamp,
+          event: {
+            ...event,
+            timestamp
+          },
+          isStudyContext: meta?.isStudyContext === true,
+          writeToDataset: meta?.writeToDataset === true
+        }
+      ].slice(-PRECHAOS_EVENT_BUFFER_SIZE)
       persistBehaviorWindow(nextWindow)
       return { behaviorWindow: nextWindow }
     }),
-  setPrediction: (prediction, timestamp = Date.now()) =>
+  setPrediction: (prediction, timestamp = Date.now(), requestId) =>
     set((state) => {
+      if (requestId && state.lastPredictionRequestId && requestId !== state.lastPredictionRequestId) {
+        return state
+      }
+
       const previousRisk = state.history.length === 0 ? 0 : (state.currentPrediction?.risk ?? prediction.risk)
-      const currentRoute = window.location.hash.replace(/^#/, '') || '/'
       const productiveRoute = state.studyContextActive
-      const latestFeatures = state.behaviorWindow[state.behaviorWindow.length - 1]?.features
-      const activeElement = document.activeElement as HTMLElement | null
-      const focusedEditable = Boolean(
-        activeElement &&
-          (activeElement.tagName === 'INPUT' ||
-            activeElement.tagName === 'TEXTAREA' ||
-            activeElement.isContentEditable ||
-            activeElement.getAttribute('role') === 'textbox')
-      )
+      const focusedEditable = state.appContext.focused_editable
 
       let contextualRisk = prediction.risk
       if (state.history.length === 0) {
@@ -276,21 +339,13 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
       } else if (state.history.length < 4) {
         contextualRisk *= 0.84
       }
-      if (productiveRoute && latestFeatures) {
-        const [typingSpeed, , , , idleTime, mouseSpeed, tabSwitches] = latestFeatures
+      if (productiveRoute) {
         const quietButEngaged =
-          idleTime >= 2 &&
-          idleTime <= 20 &&
-          typingSpeed < 0.5 &&
-          mouseSpeed < 0.25 &&
-          tabSwitches < 0.2 &&
-          focusedEditable
+          focusedEditable &&
+          state.appContext.reading_mode === false &&
+          state.appContext.recent_meaningful_actions >= 2
         const thinkingPause =
-          idleTime >= 2 &&
-          idleTime <= 12 &&
-          typingSpeed < 0.35 &&
-          mouseSpeed < 0.2 &&
-          tabSwitches < 0.15
+          state.appContext.reading_mode && state.appContext.route_dwell_seconds >= 2
 
         if (quietButEngaged) {
           contextualRisk = Math.min(contextualRisk * 0.58, 0.38)
@@ -328,12 +383,14 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
       persistCurrentPrediction(smoothedPrediction)
       return {
         currentPrediction: smoothedPrediction,
+        lastPredictionRequestId: requestId ?? state.lastPredictionRequestId,
         history: nextHistory
       }
     }),
   setBaseline: (baseline) => set({ baseline }),
   setStudyContextActive: (active) => set({ studyContextActive: active }),
   setWebcamEnabled: (enabled) => set({ webcamEnabled: enabled }),
+  setWebcamRecovering: (recovering) => set({ webcamRecovering: recovering }),
   setWebcamOptIn: (enabled) =>
     set((state) => {
       if (typeof window !== 'undefined') {
@@ -379,6 +436,7 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
         {
           id: crypto.randomUUID(),
           timestamp: event.timestamp ?? Date.now(),
+          collectible: state.studyContextActive,
           type: event.type,
           label: event.label,
           route: event.route,
@@ -389,5 +447,12 @@ export const usePreChaosStore = create<PreChaosStore>((set) => ({
       return {
         recentEvents: nextEvents
       }
-    })
+    }),
+  setPomodoroState: (update) =>
+    set((state) => ({
+      pomodoro: {
+        ...state.pomodoro,
+        ...update
+      }
+    }))
 }))

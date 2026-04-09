@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { preChaosBridge } from './bridge'
 import { usePreChaosStore } from './store'
-import { PRECHAOS_WINDOW_SIZE } from './types'
 import { useBehaviorCollector } from './useBehaviorCollector'
 import { useOptionalWebcamFatigue } from './useOptionalWebcamFatigue'
 
@@ -12,31 +11,50 @@ type RuntimeOptions = {
   enabled?: boolean
 }
 
+const COLLECT_DEBOUNCE_MS = 2_000
+const MAX_EVENTS_PER_BATCH = 48
+
 export function usePreChaosRuntime(options: RuntimeOptions = {}) {
   const userId = options.userId ?? 'local-user'
   const enabled = options.enabled ?? true
   const sidecarState = usePreChaosStore((state) => state.sidecarState)
   const behaviorWindow = usePreChaosStore((state) => state.behaviorWindow)
-  const appContext = usePreChaosStore((state) => state.appContext)
   const webcamOptIn = usePreChaosStore((state) => state.webcamOptIn)
   const currentPrediction = usePreChaosStore((state) => state.currentPrediction)
+  const lastPredictionRequestId = usePreChaosStore((state) => state.lastPredictionRequestId)
   const setSidecarState = usePreChaosStore((state) => state.setSidecarState)
   const setPrediction = usePreChaosStore((state) => state.setPrediction)
-  const setBaseline = usePreChaosStore((state) => state.setBaseline)
-  const setSessionReplays = usePreChaosStore((state) => state.setSessionReplays)
-  const lastPredictionRef = useRef(0)
-  const lastPassivePredictWarningAtRef = useRef(0)
-  const baselineSyncedRef = useRef(false)
   const sessionIdRef = useRef(crypto.randomUUID())
-  const lastCollectedTimestampRef = useRef(0)
-  const lastCollectedEventTimestampRef = useRef(0)
+  const previousStudyContextRef = useRef(false)
+  const previousSidecarStateRef = useRef<string | null>(null)
+  const lastCollectedTimestampRef = useRef(behaviorWindow[behaviorWindow.length - 1]?.timestamp ?? 0)
   const autoTrainTriggeredRef = useRef(false)
+  const requestSequenceRef = useRef(0)
+  const pendingRequestIdRef = useRef<string | null>(null)
 
   const { isStudyContext, studyContextEnteredAt } = useBehaviorCollector({ enabled })
   useOptionalWebcamFatigue({ enabled: enabled && webcamOptIn })
 
-  const latestBehaviorTimestamp = behaviorWindow[behaviorWindow.length - 1]?.timestamp ?? 0
-  const hasFreshStudySample = studyContextEnteredAt !== null && latestBehaviorTimestamp >= studyContextEnteredAt
+  useEffect(() => {
+    if (isStudyContext && !previousStudyContextRef.current) {
+      sessionIdRef.current = crypto.randomUUID()
+      lastCollectedTimestampRef.current = Date.now()
+      requestSequenceRef.current += 1
+    }
+
+    previousStudyContextRef.current = isStudyContext
+  }, [isStudyContext])
+
+  useEffect(() => {
+    if (previousSidecarStateRef.current === sidecarState) {
+      return
+    }
+
+    const line = `[PRECHAOS][${new Date().toISOString()}] sidecar state ${previousSidecarStateRef.current ?? 'unknown'} -> ${sidecarState}`
+    console.log(line)
+    void window.electronAPI.appLog(line)
+    previousSidecarStateRef.current = sidecarState
+  }, [sidecarState])
 
   useEffect(() => {
     if (!enabled) {
@@ -52,14 +70,6 @@ export function usePreChaosRuntime(options: RuntimeOptions = {}) {
         if (!cancelled) {
           setSidecarState(state.online ? 'online' : 'offline', state.reason ?? null)
         }
-        const baseline = await preChaosBridge.getBaseline(userId)
-        if (!cancelled) {
-          setBaseline(baseline)
-          const sessions = await preChaosBridge.getSessionReplays().catch(() => [])
-          if (!cancelled) {
-            setSessionReplays(sessions)
-          }
-        }
       } catch (error) {
         if (!cancelled) {
           setSidecarState('offline', error instanceof Error ? error.message : 'PreChaos is unavailable.')
@@ -70,177 +80,125 @@ export function usePreChaosRuntime(options: RuntimeOptions = {}) {
     return () => {
       cancelled = true
     }
-  }, [enabled, setBaseline, setSessionReplays, setSidecarState, userId])
-
-  const shouldPredict = useMemo(() => behaviorWindow.length >= PRECHAOS_WINDOW_SIZE, [behaviorWindow.length])
+  }, [enabled, setSidecarState])
 
   useEffect(() => {
-    if (!enabled || !shouldPredict || isStudyContext || !import.meta.env.DEV) {
-      return
-    }
-
-    const now = Date.now()
-    if (now - lastPassivePredictWarningAtRef.current < 5_000) {
-      return
-    }
-
-    lastPassivePredictWarningAtRef.current = now
-    console.warn('PreChaos regression: prediction was attempted while study monitoring is paused.', {
-      route: appContext.route,
-      page: appContext.page_name
-    })
-  }, [appContext.page_name, appContext.route, enabled, isStudyContext, shouldPredict])
-
-  useEffect(() => {
-    if (!enabled || !shouldPredict || sidecarState === 'offline' || !isStudyContext || !hasFreshStudySample) {
-      return
-    }
-    const now = Date.now()
-    if (now - lastPredictionRef.current < 2_000) {
-      return
-    }
-    lastPredictionRef.current = now
-
-    let cancelled = false
-    const runPrediction = async () => {
-      try {
-        const prediction = await preChaosBridge.predict(
-          behaviorWindow.map((entry) => entry.features),
-          userId,
-          appContext
-        )
-        if (!cancelled) {
-          setPrediction(prediction)
-          setSidecarState('online', null)
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setSidecarState('offline', error instanceof Error ? error.message : 'Prediction request failed.')
-        }
-      }
-    }
-    void runPrediction()
-
-    return () => {
-      cancelled = true
-    }
-  }, [
-    appContext,
-    behaviorWindow,
-    enabled,
-    hasFreshStudySample,
-    isStudyContext,
-    setPrediction,
-    setSidecarState,
-    shouldPredict,
-    sidecarState,
-    userId
-  ])
-
-  useEffect(() => {
-    if (!enabled || !shouldPredict || sidecarState === 'offline' || baselineSyncedRef.current || !isStudyContext || !hasFreshStudySample) {
+    if (!enabled || sidecarState === 'offline' || behaviorWindow.length === 0) {
       return
     }
 
     let cancelled = false
-    const syncBaseline = async () => {
-      try {
-        const baseline = await preChaosBridge.getBaseline(userId)
-        if ((baseline.samples_seen ?? 0) < PRECHAOS_WINDOW_SIZE) {
-          const updated = await preChaosBridge.updateBaseline(
-            behaviorWindow.map((entry) => entry.features),
-            userId
-          )
-          if (!cancelled && updated) {
-            setBaseline(updated)
-            baselineSyncedRef.current = true
-          }
-          return
-        }
-        if (!cancelled) {
-          setBaseline(baseline)
-          baselineSyncedRef.current = true
-        }
-      } catch {
-        // Keep the app usable even when baseline sync is unavailable.
-      }
-    }
 
-    void syncBaseline()
-    return () => {
-      cancelled = true
-    }
-  }, [behaviorWindow, enabled, hasFreshStudySample, isStudyContext, setBaseline, shouldPredict, sidecarState, userId])
-
-  useEffect(() => {
-    if (!enabled || sidecarState === 'offline' || behaviorWindow.length === 0 || !isStudyContext || !hasFreshStudySample) {
-      return
-    }
-
-    let cancelled = false
-    const flush = async () => {
-      const samples = behaviorWindow
+    const buildPendingBatches = () => {
+      const pendingEntries = behaviorWindow
         .filter((entry) => entry.timestamp > lastCollectedTimestampRef.current)
-        .map((entry) => ({
-          timestamp: entry.timestamp,
-          features: entry.features,
-          context: appContext,
-          prediction: currentPrediction
-            ? {
-                risk: currentPrediction.risk,
-                state: currentPrediction.state,
-                confidence: currentPrediction.confidence
-              }
-            : null
-        }))
-      const recentEvents = usePreChaosStore
-        .getState()
-        .recentEvents.filter((event) => event.timestamp > lastCollectedEventTimestampRef.current)
-        .map((event) => ({
-          timestamp: event.timestamp,
-          type: event.type,
-          label: event.label,
-          route: event.route,
-          importance: event.importance
-        }))
+        .sort((left, right) => left.timestamp - right.timestamp)
 
-      if (samples.length === 0 && recentEvents.length === 0) {
+      if (pendingEntries.length === 0) {
+        return []
+      }
+
+      const batches: Array<{
+        entries: typeof pendingEntries
+        writeToDataset: boolean
+      }> = []
+
+      for (const entry of pendingEntries) {
+        const lastBatch = batches[batches.length - 1]
+        if (
+          !lastBatch ||
+          lastBatch.writeToDataset !== entry.writeToDataset ||
+          lastBatch.entries.length >= MAX_EVENTS_PER_BATCH
+        ) {
+          batches.push({
+            entries: [entry],
+            writeToDataset: entry.writeToDataset
+          })
+          continue
+        }
+
+        lastBatch.entries.push(entry)
+      }
+
+      return batches
+    }
+
+    const flush = async () => {
+      const batches = buildPendingBatches()
+      if (batches.length === 0) {
         return
       }
 
+      requestSequenceRef.current += 1
+      const currentSequence = requestSequenceRef.current
+      const requestId = `${sessionIdRef.current}-${currentSequence}-${Date.now()}`
+      pendingRequestIdRef.current = requestId
+
       try {
-        await preChaosBridge.collect({
-          userId,
-          sessionId: sessionIdRef.current,
-          samples,
-          events: recentEvents
-        })
-        if (!cancelled) {
-          const sessions = await preChaosBridge.getSessionReplays().catch(() => [])
-          if (!cancelled) {
-            setSessionReplays(sessions)
+        for (let i = 0; i < batches.length; i++) {
+          const batch = batches[i]
+          if (cancelled || requestSequenceRef.current !== currentSequence) {
+            return
           }
-          if (samples.length > 0) {
-            lastCollectedTimestampRef.current = samples[samples.length - 1].timestamp
+
+          const response = await preChaosBridge.collect({
+            userId,
+            sessionId: sessionIdRef.current,
+            sessionStartedAt: studyContextEnteredAt,
+            writeToDataset: batch.writeToDataset,
+            predict: i === batches.length - 1,
+            requestId,
+            events: batch.entries.map((entry) => entry.event)
+          })
+
+          if (cancelled) {
+            return
           }
-          if (recentEvents.length > 0) {
-            lastCollectedEventTimestampRef.current = recentEvents[recentEvents.length - 1].timestamp as number
+
+          if (pendingRequestIdRef.current !== requestId) {
+            return
+          }
+
+          const lastTimestamp = batch.entries[batch.entries.length - 1]?.timestamp
+          if (typeof lastTimestamp === 'number') {
+            lastCollectedTimestampRef.current = Math.max(lastCollectedTimestampRef.current, lastTimestamp)
+          }
+
+          if (response.prediction && response.requestId === requestId) {
+            setPrediction(response.prediction, Date.now(), requestId)
           }
         }
-      } catch {
-        // Collection failure should never break the app.
+
+        if (cancelled || requestSequenceRef.current !== currentSequence) {
+          return
+        }
+
+        setSidecarState('online', null)
+      } catch (error) {
+        if (!cancelled && requestSequenceRef.current === currentSequence) {
+          setSidecarState('offline', error instanceof Error ? error.message : 'Collection request failed.')
+        }
       }
     }
 
     const timer = window.setTimeout(() => {
       void flush()
-    }, 15_000)
+    }, COLLECT_DEBOUNCE_MS)
 
     return () => {
       cancelled = true
+      pendingRequestIdRef.current = null
       window.clearTimeout(timer)
     }
-  }, [appContext, behaviorWindow, currentPrediction, enabled, hasFreshStudySample, isStudyContext, setSessionReplays, sidecarState, userId])
+  }, [
+    behaviorWindow,
+    enabled,
+    setPrediction,
+    setSidecarState,
+    sidecarState,
+    studyContextEnteredAt,
+    userId
+  ])
 
   useEffect(() => {
     if (!enabled || sidecarState === 'offline' || autoTrainTriggeredRef.current) {
@@ -259,8 +217,6 @@ export function usePreChaosRuntime(options: RuntimeOptions = {}) {
         ) {
           autoTrainTriggeredRef.current = true
           await preChaosBridge.trainOnLiveData()
-          const sessions = await preChaosBridge.getSessionReplays().catch(() => [])
-          setSessionReplays(sessions)
         }
       } catch {
         // Automatic training should remain opportunistic.
@@ -270,5 +226,5 @@ export function usePreChaosRuntime(options: RuntimeOptions = {}) {
     return () => {
       window.clearTimeout(timer)
     }
-  }, [currentPrediction?.mode, enabled, setSessionReplays, sidecarState])
+  }, [currentPrediction?.mode, enabled, sidecarState])
 }

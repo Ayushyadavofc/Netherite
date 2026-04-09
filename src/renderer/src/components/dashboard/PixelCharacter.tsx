@@ -1,13 +1,18 @@
 interface PixelCharacterProps {
   gender?: 'male' | 'female'
+  className?: string
 }
 
-export function PixelCharacter({ gender = 'male' }: PixelCharacterProps) {
+export function PixelCharacter({ gender = 'male', className = '' }: PixelCharacterProps) {
   // Pure hard-edged rigid pixel grid (64x64 mapped to 192px -> 3x3 physical pixels)
   // Everything must be <rect> integer coordinates. NO smooth interpolations.
   return (
-    <div className="char-step w-full h-full cursor-pointer relative z-10 [image-rendering:pixelated]">
-      <svg viewBox="0 0 64 64" className="w-full h-full drop-shadow-2xl overflow-visible [shape-rendering:crispEdges]">
+    <div className={`char-step relative z-10 h-full w-full max-h-full max-w-full overflow-hidden cursor-pointer [image-rendering:pixelated] ${className}`}>
+      <svg
+        viewBox="0 0 64 64"
+        preserveAspectRatio="xMidYMid meet"
+        className="block h-full w-full max-h-full max-w-full overflow-hidden drop-shadow-2xl [shape-rendering:crispEdges]"
+      >
         {/* Shadow */}
         <rect x="22" y="60" width="20" height="2" fill="#000000" opacity="0.5" />
 

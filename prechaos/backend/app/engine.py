@@ -1,33 +1,46 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 import joblib
 import numpy as np
-import torch
 from sklearn.preprocessing import StandardScaler
 
 from .config import (
     BASELINE_PATH,
+    DATA_ROOT,
     FEATURE_NAMES,
     FEEDBACK_PATH,
     LIVE_DATA_PATH,
     LIVE_EVENT_PATH,
     LIVE_TRAINING_META_PATH,
     MODEL_ROOT,
+    PREDICTION_LOG_PATH,
     SCALER_PATH,
     TRAINED_MODEL_PATH,
     WINDOW_SIZE,
 )
-from .model import PreChaosTransformer
+from .dataset_writer import SecureDatasetWriter
+from .feature_engineering import (
+    FeatureEngineeringError,
+    build_feature_matrix,
+    sanitize_events,
+)
+from .model import feature_contributions, predict_probability
+from .security import SecurityViolationError, log_suspicious_activity, safe_write_text, validate_artifact_manifest
 
 
 def _ensure_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+ACTION_VERBS = {"Take", "Pick", "Close", "Stop", "Look", "Try", "Keep", "Review", "Use", "You're"}
 
 
 def _safe_mean_std(values: np.ndarray) -> Dict[str, List[float]]:
@@ -43,6 +56,8 @@ class PredictionResult:
     status: str
     state: str
     confidence: float
+    confidence_score: float
+    authority_label: str
     focus_score: float
     fatigue_score: float
     distraction_score: float
@@ -60,12 +75,11 @@ class PredictionResult:
 
 
 class PreChaosEngine:
+    _dataset_lock = threading.Lock()
+
     def __init__(self) -> None:
         MODEL_ROOT.mkdir(parents=True, exist_ok=True)
-        self.device = torch.device("cpu")
-        self.model = PreChaosTransformer(feature_dim=len(FEATURE_NAMES))
-        self.model.to(self.device)
-        self.model.eval()
+        self.model = None
         self.scaler = StandardScaler()
         self.mode = "demo"
         self.feedback_state = self._load_json(
@@ -84,59 +98,162 @@ class PreChaosEngine:
                 "users": {},
             },
         )
-        self._initialize_demo_weights()
         self._load_trained_artifacts_if_available()
+        self.dataset_writer = SecureDatasetWriter(LIVE_DATA_PATH, LIVE_EVENT_PATH, PREDICTION_LOG_PATH)
+        self.session_event_cache: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+        self.session_cache_lock = threading.Lock()
+        self.session_authority_cache = self._compute_session_authority()
 
     def _load_json(self, path: Path, default: Dict) -> Dict:
         _ensure_dir(path)
         if not path.exists():
-            path.write_text(json.dumps(default, indent=2), encoding="utf-8")
+            safe_write_text(path, json.dumps(default, indent=2), managed_root=DATA_ROOT)
             return default
         return json.loads(path.read_text(encoding="utf-8"))
 
     def _save_json(self, path: Path, payload: Dict) -> None:
-        _ensure_dir(path)
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    def _initialize_demo_weights(self) -> None:
-        with torch.no_grad():
-            for parameter in self.model.parameters():
-                parameter.zero_()
-            feature_dim = len(FEATURE_NAMES)
-            self.model.input_projection.weight.zero_()
-            for i in range(feature_dim):
-                self.model.input_projection.weight[i, i] = 1.0
-            if self.model.input_projection.bias is not None:
-                self.model.input_projection.bias.zero_()
-            final_linear = self.model.head[-1]
-            penultimate = self.model.head[1]
-            penultimate.weight.zero_()
-            penultimate.bias.zero_()
-            risk_directions = torch.tensor(
-                [-0.9, 1.2, 1.1, 0.8, 0.8, 0.4, 0.5, 0.3, 0.6], dtype=torch.float32
-            )
-            for i in range(min(len(risk_directions), penultimate.weight.shape[0])):
-                penultimate.weight[i, i] = risk_directions[i]
-            final_linear.weight.zero_()
-            final_linear.bias.fill_(-0.15)
-            final_linear.weight[0, : len(risk_directions)] = 0.25
+        safe_write_text(path, json.dumps(payload, indent=2), managed_root=DATA_ROOT)
 
     def _load_trained_artifacts_if_available(self) -> None:
-        if TRAINED_MODEL_PATH.exists():
-            state = torch.load(TRAINED_MODEL_PATH, map_location=self.device)
-            self.model.load_state_dict(state)
+        if not TRAINED_MODEL_PATH.exists() or not SCALER_PATH.exists():
+            return
+        try:
+            validate_artifact_manifest(model_path=TRAINED_MODEL_PATH, scaler_path=SCALER_PATH)
+            candidate_model = joblib.load(TRAINED_MODEL_PATH)
+            candidate_scaler = joblib.load(SCALER_PATH)
+            if not hasattr(candidate_model, "predict_proba") or not hasattr(candidate_model, "coef_"):
+                raise SecurityViolationError("Loaded model artifact is not a supported classifier.")
+            if not hasattr(candidate_scaler, "transform"):
+                raise SecurityViolationError("Loaded scaler artifact is invalid.")
+            self.model = candidate_model
+            self.scaler = candidate_scaler
             self.mode = "trained"
-        if SCALER_PATH.exists():
-            self.scaler = joblib.load(SCALER_PATH)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, SecurityViolationError) as error:
+            log_suspicious_activity(
+                "model_artifact_validation_failed",
+                reason=str(error),
+                model_file=TRAINED_MODEL_PATH.name,
+                scaler_file=SCALER_PATH.name,
+            )
+            self.model = None
+            self.scaler = StandardScaler()
+            self.mode = "demo"
 
     def reload_artifacts(self) -> None:
-        self.model = PreChaosTransformer(feature_dim=len(FEATURE_NAMES))
-        self.model.to(self.device)
-        self.model.eval()
+        self.model = None
         self.scaler = StandardScaler()
         self.mode = "demo"
-        self._initialize_demo_weights()
         self._load_trained_artifacts_if_available()
+        self.session_authority_cache = self._compute_session_authority()
+
+    def refresh_session_authority_cache(self) -> None:
+        self.session_authority_cache = self._compute_session_authority()
+
+    def _cache_session_events(self, session_id: str, raw_events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        sanitized_events = [event.__dict__ for event in sanitize_events(raw_events)]
+        if not sanitized_events:
+            raise FeatureEngineeringError("At least one raw event is required.")
+
+        cutoff = sanitized_events[-1]["timestamp"] - 120_000
+        with self.session_cache_lock:
+            cache = self.session_event_cache[session_id]
+            cache.extend(sanitized_events)
+            while cache and cache[0]["timestamp"] < cutoff:
+                cache.popleft()
+            while len(cache) > 2_000:
+                cache.popleft()
+            return list(cache)
+
+    def _build_feature_matrix_from_events(
+        self,
+        session_id: str,
+        events: Sequence[Mapping[str, Any]],
+        *,
+        session_started_at: int | None = None,
+    ) -> list[list[float]]:
+        cached_events = self._cache_session_events(session_id, events)
+        return build_feature_matrix(
+            sanitize_events(cached_events),
+            session_started_at=session_started_at,
+        )
+
+    def predict_from_events(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        events: Sequence[Mapping[str, Any]],
+        session_started_at: int | None = None,
+        context: dict | None = None,
+        persist_prediction: bool = True,
+    ) -> PredictionResult:
+        feature_matrix = self._build_feature_matrix_from_events(
+            session_id,
+            events,
+            session_started_at=session_started_at,
+        )
+        prediction = self.predict(feature_matrix, user_id, context)
+        if persist_prediction:
+            self.dataset_writer.append_prediction_log(
+                user_id=user_id,
+                session_id=session_id,
+                timestamp=int(sanitize_events(events)[-1].timestamp),
+                prediction=prediction.__dict__,
+                route=str((context or {}).get("route", "/")),
+            )
+        return prediction
+
+    def _count_live_sessions(self) -> int:
+        if not LIVE_DATA_PATH.exists():
+            return 0
+
+        session_ids: set[str] = set()
+        with LIVE_DATA_PATH.open("r", encoding="utf-8") as sample_file:
+            for line in sample_file:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                session_id = str(payload.get("session_id", "")).strip()
+                if session_id:
+                    session_ids.add(session_id)
+        return len(session_ids)
+
+    def _compute_session_authority(self) -> dict[str, float | int | str]:
+        session_count = 0
+        if LIVE_TRAINING_META_PATH.exists():
+            try:
+                metadata = json.loads(LIVE_TRAINING_META_PATH.read_text(encoding="utf-8"))
+                session_count = int(metadata.get("session_count", 0) or 0)
+            except (json.JSONDecodeError, OSError, TypeError, ValueError):
+                session_count = 0
+
+        if session_count <= 0:
+            session_count = self._count_live_sessions()
+
+        if session_count <= 0:
+            confidence_score = 0.30
+            authority_label = "Still learning your patterns"
+        elif session_count <= 3:
+            confidence_score = 0.50
+            authority_label = "Still learning your patterns"
+        elif session_count <= 9:
+            confidence_score = 0.70
+            authority_label = f"Based on your last {session_count} sessions"
+        elif session_count <= 19:
+            confidence_score = 0.85
+            authority_label = f"Based on your last {session_count} sessions at this time of day"
+        else:
+            confidence_score = 0.95
+            authority_label = f"Based on your last {session_count} sessions at this time of day"
+
+        return {
+            "session_count": session_count,
+            "confidence_score": confidence_score,
+            "authority_label": authority_label,
+        }
 
     def _resolve_baseline(self, user_id: str | None) -> Dict[str, Sequence[float]]:
         if user_id and user_id in self.baseline_state["users"]:
@@ -155,11 +272,7 @@ class PreChaosEngine:
             normalized = (scaled + personalized) / 2.0
         else:
             normalized = (clipped - means) / np.where(stds < 1e-3, 1.0, stds)
-        smoothed = normalized.copy()
-        if len(smoothed) > 2:
-            for idx in range(1, len(smoothed)):
-                smoothed[idx] = 0.75 * smoothed[idx] + 0.25 * smoothed[idx - 1]
-        return smoothed.astype(np.float32)
+        return normalized.astype(np.float32)
 
     def _status_for_risk(self, risk: float) -> str:
         if risk < 0.35:
@@ -250,6 +363,10 @@ class PreChaosEngine:
         habit_check_ins = float(context.get("habit_check_ins", 0))
         progress_events = float(context.get("progress_events", 0))
         page_name = str(context.get("page_name", "other"))
+
+        if page_name not in ("notes", "flashcards"):
+            todo_completions = 0.0
+            habit_check_ins = 0.0
 
         focus_score = 0.32
         focus_score += min(typing_speed * 0.18, 0.22)
@@ -388,28 +505,57 @@ class PreChaosEngine:
     def _build_insights(
         self,
         raw_features: np.ndarray,
-        normalized_features: np.ndarray,
-        attention: np.ndarray,
+        feature_weights: np.ndarray,
+        state: str,
+        risk: float,
+        fatigue_score: float,
+        distraction_score: float,
+        reflection_score: float,
+        uncertainty_score: float,
     ) -> tuple[list[str], list[dict[str, float]]]:
-        weighted_signal = np.abs(normalized_features) * attention[:, None]
-        feature_weights = weighted_signal.sum(axis=0)
-        top_indices = feature_weights.argsort()[::-1][:3]
+        top_indices = np.abs(feature_weights).argsort()[::-1][:3]
         dominant_signals: list[dict[str, float]] = []
-        insights: list[str] = []
         latest = raw_features[-1]
+
         for idx in top_indices:
-            strength = float(feature_weights[idx])
+            strength = float(abs(feature_weights[idx]))
             dominant_signals.append({"feature": FEATURE_NAMES[idx], "score": round(strength, 4)})
-            if FEATURE_NAMES[idx] == "pause_time":
-                insights.append(f"High pause_time is elevating instability risk ({latest[idx]:.2f}).")
-            elif FEATURE_NAMES[idx] == "variation":
-                insights.append(f"Recent variation spike is contributing heavily ({latest[idx]:.2f}).")
-            elif FEATURE_NAMES[idx] == "typing_speed":
-                insights.append(f"Typing_speed trend shifted from baseline ({latest[idx]:.2f}).")
-            elif FEATURE_NAMES[idx] == "idle_time":
-                insights.append(f"Idle_time drift suggests attention fragmentation ({latest[idx]:.2f}).")
-            else:
-                insights.append(f"{FEATURE_NAMES[idx]} is a dominant contributor right now.")
+
+        dominant_features = {FEATURE_NAMES[idx] for idx in top_indices}
+        pause_time = float(latest[1])
+        tab_switch_frequency = float(latest[6])
+        fatigue_signal = float(latest[8])
+
+        fatigue_detected = fatigue_score >= 0.55 or fatigue_signal >= 0.55 or state == "fatigued"
+        rapid_tab_switching = "tab_switch_frequency" in dominant_features or tab_switch_frequency >= 0.2
+        high_pause_time = "pause_time" in dominant_features or pause_time >= 0.9
+        distraction_pattern = state == "distracted" or distraction_score >= 0.55
+        reflective_state = state == "reflective" or reflection_score >= 0.62
+        focused_state = state == "focused" or risk < 0.35
+        steady_state = state == "steady"
+
+        if fatigue_detected:
+            insight = "Look away from your screen for 30 seconds."
+        elif state == "overloaded":
+            insight = "Stop adding new material — consolidate what you have."
+        elif rapid_tab_switching:
+            insight = "Pick one task and stay with it for 10 minutes."
+        elif high_pause_time:
+            insight = "Take a 2-minute break or switch to a lighter note."
+        elif distraction_pattern:
+            insight = "Close other tabs and return to your current note."
+        elif reflective_state:
+            insight = "Review what you've written — this is good consolidation time."
+        elif focused_state:
+            insight = "You're in a good flow. Use it for your hardest material."
+        elif steady_state:
+            insight = "Keep your current pace. You're holding focus well."
+        else:
+            insight = "Keep going — PreChaos is still calibrating to you."
+
+        insights = [insight]
+        assert len(insights) == 1, f"Expected exactly one insight, got {len(insights)}"
+        assert insights[0].split()[0] in ACTION_VERBS, f"Bad insight: {insights[0]}"
         return insights, dominant_signals
 
     def predict(
@@ -428,39 +574,20 @@ class PreChaosEngine:
             array = array[-WINDOW_SIZE:]
 
         normalized = self._normalize_features(array, user_id)
-        tensor = torch.from_numpy(normalized).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            logits, attention_weights = self.model(tensor)
-            model_risk = float(torch.sigmoid(logits).item())
-        heuristic_risk = self._heuristic_risk(array)
-        activity_level = float(array[-1][0] + array[-1][5] + array[-1][6] * 2.0)
-        if self.mode == "trained":
-            blend_weight = 0.25 if activity_level < 0.2 else 0.4
-            blended_risk = (model_risk * blend_weight) + (heuristic_risk * (1.0 - blend_weight))
+        latest_normalized = normalized[-1]
+        attention = np.zeros(WINDOW_SIZE, dtype=np.float32)
+        attention[-1] = 1.0
+        fallback_only = self.model is None or self.mode != "trained"
+        if fallback_only:
+            model_risk = self._heuristic_risk(array)
+            contribution_weights = np.abs(latest_normalized)
         else:
-            blended_risk = (model_risk * 0.45) + (heuristic_risk * 0.55)
-        if context:
-            if context.get("productive_context") and context.get("focused_editable"):
-                blended_risk *= 0.9
-            if context.get("reading_mode"):
-                blended_risk *= 0.88
-            activity_bonus = min(float(context.get("recent_meaningful_actions", 0)) * 0.015, 0.08)
-            blended_risk = max(0.03, blended_risk - activity_bonus)
-            progress_bonus = min(
-                float(context.get("todo_completions", 0)) * 0.05
-                + float(context.get("habit_check_ins", 0)) * 0.045
-                + float(context.get("flashcard_successes", 0)) * 0.04
-                + float(context.get("note_saves", 0)) * 0.035
-                + float(context.get("progress_events", 0)) * 0.018,
-                0.22,
-            )
-            blended_risk = max(0.02, blended_risk - progress_bonus)
-            route_switch_penalty = min(float(context.get("route_switches", 0)) * 0.03, 0.12)
-            blended_risk = min(0.98, blended_risk + route_switch_penalty)
+            model_risk = predict_probability(self.model, latest_normalized)
+            contribution_weights = feature_contributions(self.model, latest_normalized)
+
         hour = datetime.now().hour
         factor = float(self.feedback_state["correction_factors"][hour])
-        final_risk = float(np.clip(blended_risk * factor, 0.0, 1.0))
-        attention = attention_weights.squeeze(0).cpu().numpy()
+        final_risk = float(np.clip(model_risk * factor, 0.0, 1.0))
         focus_score, fatigue_score, distraction_score, reflection_score, uncertainty_score = self._compute_mental_scores(
             array, context
         )
@@ -475,14 +602,25 @@ class PreChaosEngine:
             array,
         )
         page_explanation = self._page_explanation(context, array)
-        insights, dominant_signals = self._build_insights(array, normalized, attention)
-        if page_explanation not in insights:
-            insights = [context_summary, page_explanation, *insights][:5]
+        confidence_score = float(self.session_authority_cache.get("confidence_score", 0.30))
+        authority_label = str(self.session_authority_cache.get("authority_label", "Still learning your patterns"))
+        insights, dominant_signals = self._build_insights(
+            array,
+            contribution_weights,
+            state,
+            final_risk,
+            fatigue_score,
+            distraction_score,
+            reflection_score,
+            uncertainty_score,
+        )
         return PredictionResult(
             risk=round(final_risk, 4),
             status=self._status_for_risk(final_risk),
             state=state,
             confidence=confidence,
+            confidence_score=round(confidence_score, 4),
+            authority_label=authority_label,
             focus_score=round(focus_score, 4),
             fatigue_score=round(fatigue_score, 4),
             distraction_score=round(distraction_score, 4),
@@ -491,7 +629,7 @@ class PreChaosEngine:
             insights=insights,
             dominant_signals=dominant_signals,
             attention=[round(float(value), 4) for value in attention.tolist()],
-            model_risk=round(blended_risk, 4),
+            model_risk=round(model_risk, 4),
             correction_factor=round(factor, 4),
             baseline_ready=bool(self.baseline_state.get("samples_seen", 0) >= WINDOW_SIZE),
             mode=self.mode,
@@ -546,6 +684,21 @@ class PreChaosEngine:
             "feature_names": FEATURE_NAMES,
         }
 
+    def update_baseline_from_events(
+        self,
+        user_id: str,
+        session_id: str,
+        events: Sequence[Mapping[str, Any]],
+        *,
+        session_started_at: int | None = None,
+    ) -> Dict:
+        feature_matrix = self._build_feature_matrix_from_events(
+            session_id,
+            events,
+            session_started_at=session_started_at,
+        )
+        return self.update_baseline(user_id, feature_matrix)
+
     def get_baseline(self, user_id: str | None = None) -> Dict:
         baseline = self._resolve_baseline(user_id)
         return {
@@ -557,46 +710,65 @@ class PreChaosEngine:
             "mode": self.mode,
         }
 
-    def append_live_samples(
+    def collect_raw_events(
         self,
         user_id: str,
         session_id: str,
-        samples: Sequence[dict],
-        events: Sequence[dict] | None = None,
-    ) -> Dict[str, int | bool]:
-        _ensure_dir(LIVE_DATA_PATH)
-        _ensure_dir(LIVE_EVENT_PATH)
+        events: Sequence[Mapping[str, Any]],
+        *,
+        session_started_at: int | None = None,
+        write_to_dataset: bool = True,
+        predict: bool = True,
+        context: dict | None = None,
+        request_id: str | None = None,
+    ) -> Dict[str, Any]:
+        sanitized_events = sanitize_events(events)
+        feature_matrix = self._build_feature_matrix_from_events(
+            session_id,
+            [event.__dict__ for event in sanitized_events],
+            session_started_at=session_started_at,
+        )
+        latest_features = feature_matrix[-1]
+        latest_timestamp = int(sanitized_events[-1].timestamp)
+
+        appended_events = self.dataset_writer.append_events(
+            user_id=user_id,
+            session_id=session_id,
+            events=sanitized_events,
+        )
+
         appended_samples = 0
-        appended_events = 0
-        with LIVE_DATA_PATH.open("a", encoding="utf-8") as sample_file:
-            for sample in samples:
-                payload = {
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "timestamp": sample.get("timestamp"),
-                    "features": sample.get("features"),
-                    "context": sample.get("context", {}),
-                    "prediction": sample.get("prediction"),
-                }
-                sample_file.write(json.dumps(payload) + "\n")
-                appended_samples += 1
-        if events:
-            with LIVE_EVENT_PATH.open("a", encoding="utf-8") as event_file:
-                for event in events:
-                    event_file.write(
-                        json.dumps(
-                            {
-                                "user_id": user_id,
-                                "session_id": session_id,
-                                **event,
-                            }
-                        )
-                        + "\n"
-                    )
-                    appended_events += 1
+        if write_to_dataset:
+            # Security fix: only backend-engineered features enter the training dataset.
+            self.dataset_writer.append_training_sample(
+                user_id=user_id,
+                session_id=session_id,
+                timestamp=latest_timestamp,
+                features=latest_features,
+                source_event_count=len(sanitized_events),
+            )
+            self.update_baseline(user_id, [latest_features])
+            appended_samples = 1
+
+        prediction_payload: dict[str, Any] | None = None
+        if predict:
+            prediction = self.predict(feature_matrix, user_id=user_id, context=context)
+            self.dataset_writer.append_prediction_log(
+                user_id=user_id,
+                session_id=session_id,
+                timestamp=latest_timestamp,
+                prediction=prediction.__dict__,
+                route=str((context or {}).get("route", "/")),
+            )
+            prediction_payload = prediction.__dict__
+
         return {
+            "request_id": request_id,
             "appended_samples": appended_samples,
             "appended_events": appended_events,
+            "feature_names": FEATURE_NAMES,
+            "latest_features": latest_features,
+            "prediction": prediction_payload,
             "ready_for_training": self.get_live_dataset_status()["ready_for_training"],
         }
 
@@ -628,12 +800,109 @@ class PreChaosEngine:
             "last_trained_at": last_trained_at,
         }
 
+    def get_daily_rhythm(self, user_id: str | None = None) -> dict:
+        current_hour = datetime.now().hour
+        empty_hours = [
+            {
+                "hour": hour,
+                "avg_focus_score": 0.0,
+                "sample_count": 0,
+                "enough_data": False,
+            }
+            for hour in range(24)
+        ]
+
+        if not PREDICTION_LOG_PATH.exists():
+            return {
+                "available": False,
+                "session_count": 0,
+                "current_hour": current_hour,
+                "peak_hour": None,
+                "hours": empty_hours,
+            }
+
+        try:
+            session_ids: set[str] = set()
+            grouped_scores: dict[int, list[float]] = {hour: [] for hour in range(24)}
+
+            with PREDICTION_LOG_PATH.open("r", encoding="utf-8") as sample_file:
+                for line in sample_file:
+                    if not line.strip():
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    sample_user_id = str(payload.get("user_id", "")).strip()
+                    if user_id and sample_user_id and sample_user_id != user_id:
+                        continue
+
+                    session_id = str(payload.get("session_id", "")).strip()
+                    if session_id:
+                        session_ids.add(session_id)
+
+                    prediction = payload.get("prediction") or {}
+                    timestamp = payload.get("timestamp")
+                    focus_score = prediction.get("focus_score")
+
+                    if timestamp is None or focus_score is None:
+                        continue
+
+                    try:
+                        hour = datetime.fromtimestamp(float(timestamp) / 1000.0).hour
+                        focus_value = float(focus_score)
+                    except (TypeError, ValueError, OSError):
+                        continue
+
+                    if hour not in grouped_scores:
+                        continue
+
+                    grouped_scores[hour].append(float(np.clip(focus_value, 0.0, 1.0)))
+
+            hours = []
+            peak_hour = None
+            peak_score = -1.0
+
+            for hour in range(24):
+                scores = grouped_scores.get(hour, [])
+                sample_count = len(scores)
+                avg_focus_score = round(float(np.mean(scores)), 4) if sample_count > 0 else 0.0
+                enough_data = sample_count >= 3
+                if enough_data and avg_focus_score > peak_score:
+                    peak_score = avg_focus_score
+                    peak_hour = hour
+                hours.append(
+                    {
+                        "hour": hour,
+                        "avg_focus_score": avg_focus_score,
+                        "sample_count": sample_count,
+                        "enough_data": enough_data,
+                    }
+                )
+
+            return {
+                "available": len(session_ids) >= 4 and peak_hour is not None,
+                "session_count": len(session_ids),
+                "current_hour": current_hour,
+                "peak_hour": peak_hour,
+                "hours": hours,
+            }
+        except OSError:
+            return {
+                "available": False,
+                "session_count": 0,
+                "current_hour": current_hour,
+                "peak_hour": None,
+                "hours": empty_hours,
+            }
+
     def get_recent_session_replays(self, limit: int = 8) -> list[dict]:
-        if not LIVE_DATA_PATH.exists():
+        if not PREDICTION_LOG_PATH.exists():
             return []
 
         grouped: dict[str, dict] = {}
-        with LIVE_DATA_PATH.open("r", encoding="utf-8") as sample_file:
+        with PREDICTION_LOG_PATH.open("r", encoding="utf-8") as sample_file:
             for line in sample_file:
                 if not line.strip():
                     continue
@@ -643,9 +912,8 @@ class PreChaosEngine:
                     continue
                 session_id = str(payload.get("session_id", "unknown"))
                 timestamp = int(payload.get("timestamp") or 0)
-                context = payload.get("context", {}) or {}
                 prediction = payload.get("prediction", {}) or {}
-                route = str(context.get("route", "/"))
+                route = str(payload.get("route", "/"))
                 state = str(prediction.get("state", "steady"))
                 risk = float(prediction.get("risk", 0.0))
                 entry = grouped.setdefault(

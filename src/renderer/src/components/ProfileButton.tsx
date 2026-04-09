@@ -34,7 +34,6 @@ type UserSettingsDocument = Models.Document & {
   gender?: string
   dob?: string
   avatar_id?: string
-  gemini_api_key?: string
 }
 
 const CROP_VIEW_SIZE = 280
@@ -212,8 +211,7 @@ export default function ProfileButton() {
       gender: normalizeGender(document?.gender ?? previous.gender),
       dob: document?.dob ?? previous.dob ?? '',
       avatarId: document?.avatar_id?.trim() ?? previous.avatarId ?? '',
-      // Keep the locally saved key until the cloud document has a real value.
-      geminiApiKey: document?.gemini_api_key ?? previous.geminiApiKey ?? ''
+      geminiApiKey: previous.geminiApiKey ?? ''
     }))
   }
 
@@ -305,8 +303,7 @@ export default function ProfileButton() {
         {
           gender: normalizeGender(settingsDocument?.gender ?? storedProfile.gender ?? authForm.gender),
           dob: settingsDocument?.dob ?? storedProfile.dob ?? authForm.dob,
-          avatar_id: settingsDocument?.avatar_id?.trim() ?? storedProfile.avatarId ?? '',
-          gemini_api_key: settingsDocument?.gemini_api_key ?? storedProfile.geminiApiKey ?? ''
+          avatar_id: settingsDocument?.avatar_id?.trim() ?? storedProfile.avatarId ?? ''
         },
         [
           Permission.read(Role.user(user.$id)),

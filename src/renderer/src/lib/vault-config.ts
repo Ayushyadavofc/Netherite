@@ -56,6 +56,15 @@ export const themeColorFields: Array<{
 ]
 
 const VAULT_THEME_STORAGE_KEY = 'netherite-active-theme'
+const NEUTRAL_THEME_BASE = {
+  background: '#0a0808',
+  surface: '#111111',
+  surfaceStrong: '#141212',
+  border: '#2a2422',
+  foreground: '#ffffff',
+  muted: '#a8a0a0',
+  subtle: '#444444'
+} as const
 
 export const themePalettes: ThemePalette[] = [
   {
@@ -63,58 +72,58 @@ export const themePalettes: ThemePalette[] = [
     name: 'Nether Ember',
     description: 'The original ember-and-obsidian palette.',
     primary: '#ff5625',
-    background: '#0a0808',
-    surface: '#111111',
-    surfaceStrong: '#141212',
-    border: '#2a2422',
-    foreground: '#ffffff',
-    muted: '#a8a0a0',
-    subtle: '#444444',
+    background: NEUTRAL_THEME_BASE.background,
+    surface: NEUTRAL_THEME_BASE.surface,
+    surfaceStrong: NEUTRAL_THEME_BASE.surfaceStrong,
+    border: NEUTRAL_THEME_BASE.border,
+    foreground: NEUTRAL_THEME_BASE.foreground,
+    muted: NEUTRAL_THEME_BASE.muted,
+    subtle: NEUTRAL_THEME_BASE.subtle,
     secondary: '#ffb77d',
     danger: '#ff5449'
   },
   {
     id: 'hotpink',
     name: 'Hotpink Noir',
-    description: 'Black glass with hotpink accents.',
+    description: 'Black glass with hotpink signal accents.',
     primary: '#ff4fa3',
-    background: '#09060a',
-    surface: '#161017',
-    surfaceStrong: '#110c12',
-    border: '#3e2737',
-    foreground: '#fff5fb',
-    muted: '#c7aaba',
-    subtle: '#6d5564',
+    background: NEUTRAL_THEME_BASE.background,
+    surface: NEUTRAL_THEME_BASE.surface,
+    surfaceStrong: NEUTRAL_THEME_BASE.surfaceStrong,
+    border: NEUTRAL_THEME_BASE.border,
+    foreground: NEUTRAL_THEME_BASE.foreground,
+    muted: NEUTRAL_THEME_BASE.muted,
+    subtle: NEUTRAL_THEME_BASE.subtle,
     secondary: '#ff9fd0',
     danger: '#ff6b9b'
   },
   {
     id: 'solarized',
-    name: 'Solarized Ash',
-    description: 'A deep solarized mix with warm ember highlights.',
+    name: 'Solarized Ember',
+    description: 'Near-black surfaces with solarized ember highlights.',
     primary: '#cb4b16',
-    background: '#071f26',
-    surface: '#0d2d36',
-    surfaceStrong: '#0a252d',
-    border: '#244650',
-    foreground: '#f4ebd8',
-    muted: '#93a1a1',
-    subtle: '#5b7077',
+    background: NEUTRAL_THEME_BASE.background,
+    surface: NEUTRAL_THEME_BASE.surface,
+    surfaceStrong: NEUTRAL_THEME_BASE.surfaceStrong,
+    border: NEUTRAL_THEME_BASE.border,
+    foreground: NEUTRAL_THEME_BASE.foreground,
+    muted: NEUTRAL_THEME_BASE.muted,
+    subtle: NEUTRAL_THEME_BASE.subtle,
     secondary: '#2aa198',
     danger: '#dc322f'
   },
   {
     id: 'catppuccin',
-    name: 'Catppuccin Mocha',
-    description: 'Soft mocha surfaces with pastel signal colors.',
+    name: 'Catppuccin Obsidian',
+    description: 'Obsidian surfaces with pastel signal colors.',
     primary: '#cba6f7',
-    background: '#1e1e2e',
-    surface: '#313244',
-    surfaceStrong: '#181825',
-    border: '#45475a',
-    foreground: '#cdd6f4',
-    muted: '#bac2de',
-    subtle: '#6c7086',
+    background: NEUTRAL_THEME_BASE.background,
+    surface: NEUTRAL_THEME_BASE.surface,
+    surfaceStrong: NEUTRAL_THEME_BASE.surfaceStrong,
+    border: NEUTRAL_THEME_BASE.border,
+    foreground: NEUTRAL_THEME_BASE.foreground,
+    muted: NEUTRAL_THEME_BASE.muted,
+    subtle: NEUTRAL_THEME_BASE.subtle,
     secondary: '#f9e2af',
     danger: '#f38ba8'
   }
@@ -241,6 +250,16 @@ const toRgba = (hex: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+const getReadableTextColor = (hex: string) => {
+  const { r, g, b } = hexToRgb(hex)
+  const normalized = [r, g, b].map((value) => {
+    const channel = value / 255
+    return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4)
+  })
+  const luminance = normalized[0] * 0.2126 + normalized[1] * 0.7152 + normalized[2] * 0.0722
+  return luminance > 0.44 ? '#0b0909' : '#ffffff'
+}
+
 export const getCurrentVaultPath = () => {
   return window.localStorage.getItem('netherite-current-vault-path')
 }
@@ -291,6 +310,8 @@ export const applyVaultTheme = (config: VaultConfig) => {
   const normalized = normalizeVaultConfig(config)
   const palette = getThemePreviewPalette(normalized)
   const accent = normalized.theme.customAccent ?? palette.primary
+  const accentForeground = getReadableTextColor(accent)
+  const secondaryForeground = getReadableTextColor(palette.secondary)
   const root = document.documentElement
 
   root.style.setProperty('--nv-bg', palette.background)
@@ -304,8 +325,10 @@ export const applyVaultTheme = (config: VaultConfig) => {
   root.style.setProperty('--nv-primary-soft', toRgba(accent, 0.14))
   root.style.setProperty('--nv-primary-soft-strong', toRgba(accent, 0.22))
   root.style.setProperty('--nv-primary-glow', toRgba(accent, 0.35))
+  root.style.setProperty('--nv-primary-contrast', accentForeground)
   root.style.setProperty('--nv-secondary', palette.secondary)
   root.style.setProperty('--nv-secondary-soft', toRgba(palette.secondary, 0.14))
+  root.style.setProperty('--nv-secondary-contrast', secondaryForeground)
   root.style.setProperty('--nv-danger', palette.danger)
   root.style.setProperty('--nv-danger-soft', toRgba(palette.danger, 0.16))
 
@@ -316,13 +339,13 @@ export const applyVaultTheme = (config: VaultConfig) => {
   root.style.setProperty('--popover', palette.surfaceStrong)
   root.style.setProperty('--popover-foreground', palette.foreground)
   root.style.setProperty('--primary', accent)
-  root.style.setProperty('--primary-foreground', '#ffffff')
+  root.style.setProperty('--primary-foreground', accentForeground)
   root.style.setProperty('--secondary', palette.surface)
   root.style.setProperty('--secondary-foreground', palette.foreground)
   root.style.setProperty('--muted', palette.background)
   root.style.setProperty('--muted-foreground', palette.muted)
   root.style.setProperty('--accent', accent)
-  root.style.setProperty('--accent-foreground', '#ffffff')
+  root.style.setProperty('--accent-foreground', accentForeground)
   root.style.setProperty('--destructive', palette.danger)
   root.style.setProperty('--destructive-foreground', '#ffffff')
   root.style.setProperty('--border', palette.border)
@@ -336,7 +359,7 @@ export const applyVaultTheme = (config: VaultConfig) => {
   root.style.setProperty('--sidebar', palette.background)
   root.style.setProperty('--sidebar-foreground', palette.muted)
   root.style.setProperty('--sidebar-primary', accent)
-  root.style.setProperty('--sidebar-primary-foreground', '#ffffff')
+  root.style.setProperty('--sidebar-primary-foreground', accentForeground)
   root.style.setProperty('--sidebar-accent', palette.surfaceStrong)
   root.style.setProperty('--sidebar-accent-foreground', palette.foreground)
   root.style.setProperty('--sidebar-border', palette.border)

@@ -1,5 +1,5 @@
 import type { RuntimeAppConfig } from '../../shared/runtime-config'
-import type { CameraModuleMode, CameraModuleSnapshot } from './prechaos/types'
+import type { CameraModuleMode, CameraModuleSnapshot, PreChaosRawEvent } from './prechaos/types'
 
 export interface ElectronFsNode {
   name: string
@@ -19,6 +19,8 @@ export interface ElectronSyncProgressPayload {
 
 export interface ElectronAPI {
   runtimeConfig: RuntimeAppConfig
+  appLaunchId: string
+  appLog: (message: string) => Promise<{ ok: boolean }>
   readAccountFile: <T = unknown>(userId: string, filename: string) => Promise<T | null>
   writeAccountFile: <T = unknown>(userId: string, filename: string, data: T) => Promise<T>
   migrateGuestData: (userId: string) => Promise<boolean>
@@ -71,36 +73,16 @@ export interface ElectronAPI {
   }>
   preChaosLog: (message: string) => Promise<{ ok: boolean }>
   preChaosPredict: (
-    features: number[][],
-    userId?: string,
-    context?: {
-      route: string
-      page_name: 'landing' | 'notes' | 'flashcards' | 'todos' | 'habits' | 'analytics' | 'other'
-      productive_context: boolean
-      focused_editable: boolean
-      recent_meaningful_actions: number
-      recent_event_density: number
-      route_switches: number
-      route_dwell_seconds: number
-      note_activity: number
-      note_switches: number
-      note_saves: number
-      flashcard_activity: number
-      flashcard_answer_latency: number
-      flashcard_successes: number
-      todo_activity: number
-      todo_completions: number
-      habit_activity: number
-      habit_check_ins: number
-      progress_events: number
-      reading_mode: boolean
-      webcam_opt_in: boolean
-    }
+    events: PreChaosRawEvent[],
+    sessionId: string,
+    userId?: string
   ) => Promise<{
     risk: number
     status: 'low' | 'medium' | 'high'
     state: 'focused' | 'reflective' | 'steady' | 'distracted' | 'fatigued' | 'overloaded' | 'uncertain'
     confidence: number
+    confidence_score: number
+    authority_label: string
     focus_score: number
     fatigue_score: number
     distraction_score: number
@@ -123,7 +105,9 @@ export interface ElectronAPI {
   }) => Promise<{ correction_factor: number }>
   preChaosBaseline: (payload?: {
     userId?: string
-    features?: number[][]
+    sessionId?: string
+    sessionStartedAt?: number | null
+    events?: PreChaosRawEvent[]
   }) => Promise<{
     user_id: string
     samples_seen: number
@@ -138,14 +122,39 @@ export interface ElectronAPI {
   preChaosCollect: (payload: {
     userId?: string
     sessionId: string
-    samples: Array<{
-      timestamp: number
-      features: number[]
-      context: Record<string, unknown>
-      prediction?: { risk: number; state: string; confidence: number } | null
-    }>
-    events?: Array<Record<string, unknown>>
-  }) => Promise<{ appended_samples: number; appended_events: number; ready_for_training: boolean }>
+    sessionStartedAt?: number | null
+    writeToDataset: boolean
+    predict?: boolean
+    requestId?: string
+    events: PreChaosRawEvent[]
+  }) => Promise<{
+    requestId: string
+    appended_samples: number
+    appended_events: number
+    ready_for_training: boolean
+    prediction?: {
+      risk: number
+      status: 'low' | 'medium' | 'high'
+      state: 'focused' | 'reflective' | 'steady' | 'distracted' | 'fatigued' | 'overloaded' | 'uncertain'
+      confidence: number
+      confidence_score: number
+      authority_label: string
+      focus_score: number
+      fatigue_score: number
+      distraction_score: number
+      reflection_score: number
+      uncertainty_score: number
+      insights: string[]
+      dominant_signals: Array<{ feature: string; score: number }>
+      attention: number[]
+      model_risk: number
+      correction_factor: number
+      baseline_ready: boolean
+      mode: string
+      context_summary: string
+      page_explanation: string
+    } | null
+  }>
   preChaosDatasetStatus: () => Promise<{
     sample_count: number
     session_count: number
@@ -159,6 +168,18 @@ export interface ElectronAPI {
     scaler_path: string
     metrics: Record<string, unknown>
     mode: string
+  }>
+  preChaosDailyRhythm: (payload?: { userId?: string }) => Promise<{
+    available: boolean
+    session_count: number
+    current_hour: number
+    peak_hour: number | null
+    hours: Array<{
+      hour: number
+      avg_focus_score: number
+      sample_count: number
+      enough_data: boolean
+    }>
   }>
   preChaosSessionReplays: () => Promise<
     Array<{
@@ -186,6 +207,7 @@ export interface ElectronAPI {
   preChaosCameraModuleSetMode: (mode: CameraModuleMode) => Promise<CameraModuleSnapshot>
   preChaosCameraModuleSync: (payload: Partial<CameraModuleSnapshot>) => void
   onPreChaosCameraModuleState: (listener: (payload: CameraModuleSnapshot) => void) => () => void
+  getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>
   minimize: () => void
   maximize: () => void
   close: () => void

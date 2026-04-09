@@ -22,6 +22,8 @@ const ALLOWED_SCHEMES = ['https:', 'http:']
 const PRECHAOS_HOST = '127.0.0.1'
 const PRECHAOS_PORT = 8765
 const PRECHAOS_BASE_URL = `http://${PRECHAOS_HOST}:${PRECHAOS_PORT}`
+const DEBUG_LOG_FILE = () => path.join(app.getPath('userData'), 'netherite-debug.log')
+const APP_LAUNCH_ID = randomUUID()
 let currentVaultPath: string | null = null
 let currentVaultReadOnly = false
 let lastSelectedFilePath: string | null = null
@@ -69,6 +71,27 @@ const ZIP_STORE_EXTENSIONS = new Set([
   '.zip'
 ])
 
+const APP_ICON_FILE_NAME = 'app-icon.png'
+let cachedAppIconPath: string | null = null
+
+const resolveAppIconPath = (): string => {
+  if (cachedAppIconPath) {
+    return cachedAppIconPath
+  }
+
+  const candidates = [
+    join(__dirname, '..', '..', APP_ICON_FILE_NAME),
+    join(app.getAppPath(), APP_ICON_FILE_NAME),
+    join(app.getAppPath(), '..', APP_ICON_FILE_NAME),
+    join(app.getAppPath(), '..', '..', APP_ICON_FILE_NAME),
+    join(process.resourcesPath, APP_ICON_FILE_NAME),
+    join(process.cwd(), APP_ICON_FILE_NAME)
+  ]
+
+  cachedAppIconPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+  return cachedAppIconPath
+}
+
 type PreChaosState = {
   process: ChildProcessWithoutNullStreams | null
   online: boolean
@@ -105,6 +128,9 @@ type CameraModuleSnapshot = {
     blink_count: number
     low_light: boolean
     face_detected: boolean
+    head_pose: 'center' | 'left' | 'right' | 'up' | 'down'
+    perclos: number
+    yawn_detected: boolean
     fatigue_status: 'Alert' | 'Drowsy' | 'No face'
     webcam_risk: number
     webcam_state: 'Stable' | 'Watch' | 'Elevated' | 'No face'
@@ -136,6 +162,11 @@ const preChaosState: PreChaosState = {
   logs: []
 }
 
+const SIDEKAR_MAX_RESTART_RETRIES = 5
+const SIDEKAR_BASE_RESTART_DELAY_MS = 1000
+let sidecarRestartCount = 0
+let sidecarRestartTimer: NodeJS.Timeout | null = null
+
 let cameraModuleWindow: BrowserWindow | null = null
 let isAppQuitting = false
 const cameraModuleSnapshot: CameraModuleSnapshot = {
@@ -163,6 +194,9 @@ const cameraModuleSnapshot: CameraModuleSnapshot = {
     blink_count: 0,
     low_light: false,
     face_detected: false,
+    head_pose: 'center',
+    perclos: 0,
+    yawn_detected: false,
     fatigue_status: 'No face',
     webcam_risk: 0,
     webcam_state: 'No face',
@@ -182,6 +216,17 @@ const cameraModuleSnapshot: CameraModuleSnapshot = {
 }
 
 const getPreChaosLogFile = () => join(app.getPath('userData'), 'prechaos.log')
+const getRuntimeLogFile = () => join(app.getPath('userData'), 'runtime.log')
+const logEvent = (label: string) => {
+  const line = `[MAIN][${new Date().toISOString()}] ${label}\n`
+  console.log(line.trim())
+  try {
+    fs.mkdirSync(path.dirname(DEBUG_LOG_FILE()), { recursive: true })
+    fs.appendFileSync(DEBUG_LOG_FILE(), line, 'utf-8')
+  } catch (error) {
+    console.error('Failed to write main debug log:', error)
+  }
+}
 
 const appendPreChaosLog = (message: string) => {
   const entry = `[${new Date().toISOString()}] ${message}`
@@ -192,10 +237,79 @@ const appendPreChaosLog = (message: string) => {
     .catch(() => undefined)
 }
 
+const appendRuntimeLog = (message: string) => {
+  const entry = `[${new Date().toISOString()}] ${message}`
+  void fs.promises
+    .mkdir(path.dirname(getRuntimeLogFile()), { recursive: true })
+    .then(() => fs.promises.appendFile(getRuntimeLogFile(), `${entry}\n`, 'utf-8'))
+    .catch(() => undefined)
+}
+
+const attachWindowDiagnostics = (window: BrowserWindow, label: string) => {
+  const log = (message: string) => appendRuntimeLog(`${label}: ${message}`)
+
+  window.webContents.on('render-process-gone', (_event, details) => {
+    log(`render process gone (${details.reason}) exitCode=${details.exitCode}`)
+  })
+
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    log(`did-fail-load code=${errorCode} mainFrame=${isMainFrame} url=${validatedURL} description=${errorDescription}`)
+  })
+
+  window.on('unresponsive', () => {
+    log('window became unresponsive')
+  })
+
+  window.on('responsive', () => {
+    log('window became responsive again')
+  })
+}
+
+const attachVerboseWindowLogging = (window: BrowserWindow, label: string) => {
+  const write = (message: string) => logEvent(`[${label}] ${message}`)
+
+  window.on('minimize', () => write('window minimize'))
+  window.on('restore', () => write('window restore'))
+  window.on('hide', () => write('window hide'))
+  window.on('show', () => write('window show'))
+  window.on('blur', () => write('window blur'))
+  window.on('focus', () => write('window focus'))
+  window.on('close', () => write('window close'))
+  window.on('closed', () => write('window closed'))
+  window.on('unresponsive', () => write('WINDOW UNRESPONSIVE'))
+  window.on('responsive', () => write('window responsive'))
+
+  ;(window as unknown as { on: (event: string, listener: () => void) => void }).on('crashed', () => {
+    write('RENDERER CRASHED')
+  })
+
+  window.webContents.on('did-finish-load', () => write('did-finish-load - FULL RELOAD HAPPENED'))
+  window.webContents.on('did-start-loading', () => write('did-start-loading'))
+  window.webContents.on('destroyed', () => write('webContents DESTROYED'))
+  window.webContents.on('render-process-gone', (_event, details) => {
+    write(`RENDER PROCESS GONE: ${JSON.stringify(details)}`)
+  })
+  window.webContents.on('unresponsive', () => write('webContents UNRESPONSIVE'))
+}
+
 const getPreChaosBackendRoot = () =>
   app.isPackaged
     ? join(process.resourcesPath, 'prechaos', 'backend')
     : join(app.getAppPath(), 'prechaos', 'backend')
+
+const getPreChaosApiKeyPath = () => join(getPreChaosBackendRoot(), 'data', 'api_key.txt')
+
+const getPreChaosApiKey = () => {
+  try {
+    const apiKeyPath = getPreChaosApiKeyPath()
+    if (fs.existsSync(apiKeyPath)) {
+      return fs.readFileSync(apiKeyPath, 'utf-8').trim()
+    }
+  } catch {
+    // Let the request fail naturally if the backend token is unavailable.
+  }
+  return ''
+}
 
 const getPythonCandidates = () => {
   const fromEnv = [process.env.PRECHAOS_PYTHON, process.env.PYTHON, process.env.PYTHON3].filter(
@@ -222,6 +336,30 @@ const waitForPreChaosHealth = async (timeoutMs = 12_000) => {
     await new Promise((resolve) => setTimeout(resolve, 300))
   }
   return false
+}
+
+const handleSidecarExit = () => {
+  if (isAppQuitting) {
+    return
+  }
+
+  if (sidecarRestartCount >= SIDEKAR_MAX_RESTART_RETRIES) {
+    appendPreChaosLog(`PreChaos sidecar exceeded max restart attempts (${SIDEKAR_MAX_RESTART_RETRIES}). Giving up.`)
+    return
+  }
+
+  sidecarRestartCount++
+  const delay = SIDEKAR_BASE_RESTART_DELAY_MS * Math.pow(2, sidecarRestartCount - 1)
+  appendPreChaosLog(`PreChaos sidecar crashed. Restarting in ${delay}ms (attempt ${sidecarRestartCount}/${SIDEKAR_MAX_RESTART_RETRIES})...`)
+
+  if (sidecarRestartTimer) {
+    clearTimeout(sidecarRestartTimer)
+  }
+
+  sidecarRestartTimer = setTimeout(() => {
+    sidecarRestartTimer = null
+    void ensurePreChaosSidecar()
+  }, delay)
 }
 
 async function ensurePreChaosSidecar() {
@@ -262,6 +400,7 @@ async function ensurePreChaosSidecar() {
       preChaosState.process = child
       preChaosState.pythonPath = candidate
       appendPreChaosLog(`Starting PreChaos with ${candidate}`)
+      logEvent(`[prechaos] starting sidecar with ${candidate}`)
 
       child.stdout.on('data', (chunk) => appendPreChaosLog(String(chunk).trim()))
       child.stderr.on('data', (chunk) => appendPreChaosLog(String(chunk).trim()))
@@ -270,17 +409,22 @@ async function ensurePreChaosSidecar() {
         preChaosState.process = null
         preChaosState.reason = `PreChaos exited with code ${code ?? 'unknown'}`
         appendPreChaosLog(preChaosState.reason)
+        logEvent(`[prechaos] sidecar exited code=${code ?? 'unknown'}`)
+        handleSidecarExit()
       })
       child.on('error', (error) => {
         preChaosState.online = false
         preChaosState.reason = error.message
         appendPreChaosLog(`PreChaos spawn error: ${error.message}`)
+        logEvent(`[prechaos] sidecar spawn error ${error.message}`)
       })
 
       const healthy = await waitForPreChaosHealth()
       if (healthy) {
         preChaosState.online = true
         preChaosState.reason = null
+        sidecarRestartCount = 0
+        logEvent('[prechaos] sidecar healthy')
         return { ok: true, online: true, endpoint: PRECHAOS_BASE_URL }
       }
 
@@ -296,24 +440,31 @@ async function ensurePreChaosSidecar() {
 }
 
 async function preChaosRequest<T>(route: string, init?: RequestInit): Promise<T> {
+  logEvent(`[prechaos] request start ${init?.method ?? 'GET'} ${route}`)
   const ready = await ensurePreChaosSidecar()
   if (!ready.online) {
+    logEvent(`[prechaos] request blocked ${route} | sidecar offline`)
     throw new Error(preChaosState.reason ?? 'PreChaos is offline')
   }
+
+  const apiKey = getPreChaosApiKey()
 
   const response = await fetch(`${PRECHAOS_BASE_URL}${route}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(apiKey ? { 'X-PreChaos-API-Key': apiKey } : {}),
       ...(init?.headers ?? {})
     }
   })
 
   if (!response.ok) {
     const body = await response.text()
+    logEvent(`[prechaos] request failed ${response.status} ${route} | ${body}`)
     throw new Error(`PreChaos request failed: ${response.status} ${body}`)
   }
 
+  logEvent(`[prechaos] request success ${response.status} ${route}`)
   return (await response.json()) as T
 }
 
@@ -544,6 +695,47 @@ const emitByteProgress = (
     ...payload,
     percent
   })
+}
+
+const stopPreChaosSidecar = () => {
+  if (sidecarRestartTimer) {
+    clearTimeout(sidecarRestartTimer)
+    sidecarRestartTimer = null
+  }
+
+  if (preChaosState.process && !preChaosState.process.killed) {
+    preChaosState.process.kill()
+  }
+
+  preChaosState.process = null
+}
+
+const forceQuitApplication = () => {
+  if (isAppQuitting) {
+    return
+  }
+
+  isAppQuitting = true
+  stopPreChaosSidecar()
+
+  if (cameraModuleWindow && !cameraModuleWindow.isDestroyed()) {
+    cameraModuleWindow.destroy()
+    cameraModuleWindow = null
+  }
+
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.destroy()
+    }
+  })
+
+  app.exit(0)
+
+  if (is.dev) {
+    setImmediate(() => {
+      process.exit(0)
+    })
+  }
 }
 
 async function collectFilesForZip(
@@ -1465,6 +1657,7 @@ function createCameraModuleWindow(hiddenInit = false) {
   }
 
   const bounds = getCameraModuleBounds(cameraModuleSnapshot.mode)
+  const iconPath = resolveAppIconPath()
   cameraModuleWindow = new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
@@ -1475,6 +1668,7 @@ function createCameraModuleWindow(hiddenInit = false) {
     autoHideMenuBar: true,
     backgroundColor: '#09090b',
     title: 'Camera Module',
+    icon: iconPath,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1482,6 +1676,9 @@ function createCameraModuleWindow(hiddenInit = false) {
       preload: join(__dirname, '../preload/index.js')
     }
   })
+  attachWindowDiagnostics(cameraModuleWindow, 'camera-module-window')
+  attachVerboseWindowLogging(cameraModuleWindow, 'camera-module-window')
+  logEvent('[camera-module-window] created')
 
   cameraModuleWindow.on('ready-to-show', () => {
     if (!hiddenInit) {
@@ -1518,6 +1715,7 @@ function createCameraModuleWindow(hiddenInit = false) {
   if (!hiddenInit) {
     syncCameraModuleSnapshot({ windowOpen: true })
   }
+  logEvent('[camera-module-window] load route /camera-module')
   loadRendererRoute(cameraModuleWindow, '/camera-module')
   return cameraModuleWindow
 }
@@ -1606,6 +1804,7 @@ const resolvePendingNotePath = (notesRootPath: string, targetPath: string) => {
 }
 
 function createWindow(): void {
+  const iconPath = resolveAppIconPath()
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -1615,6 +1814,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#09090b',
+    icon: iconPath,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1622,6 +1822,9 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js')
     }
   })
+  attachWindowDiagnostics(mainWindow, 'main-window')
+  attachVerboseWindowLogging(mainWindow, 'main-window')
+  logEvent('[main-window] created')
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -1639,6 +1842,7 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  logEvent('[main-window] load route /')
   loadRendererRoute(mainWindow, '/')
 }
 
@@ -1646,6 +1850,15 @@ function createWindow(): void {
 
 ipcMain.on('app:getRuntimeConfigSync', (event) => {
   event.returnValue = readRuntimeConfig()
+})
+
+ipcMain.on('app:getLaunchIdSync', (event) => {
+  event.returnValue = APP_LAUNCH_ID
+})
+
+ipcMain.handle('app:log', async (_event, message: string) => {
+  appendRuntimeLog(message)
+  return { ok: true }
 })
 
 ipcMain.handle('prechaos:camera-module-open', async () => {
@@ -1705,39 +1918,17 @@ ipcMain.handle(
   async (
     _event,
     payload: {
-      features: number[][]
+      events: Array<Record<string, unknown>>
+      sessionId: string
       userId?: string
-      context?: {
-        route: string
-        page_name: 'landing' | 'notes' | 'flashcards' | 'todos' | 'habits' | 'analytics' | 'other'
-        productive_context: boolean
-        focused_editable: boolean
-        recent_meaningful_actions: number
-        recent_event_density: number
-        route_switches: number
-        route_dwell_seconds: number
-        note_activity: number
-        note_switches: number
-        note_saves: number
-        flashcard_activity: number
-        flashcard_answer_latency: number
-        flashcard_successes: number
-        todo_activity: number
-        todo_completions: number
-        habit_activity: number
-        habit_check_ins: number
-        progress_events: number
-        reading_mode: boolean
-        webcam_opt_in: boolean
-      }
     }
   ) => {
   return preChaosRequest('/predict', {
     method: 'POST',
     body: JSON.stringify({
-      features: payload.features,
       user_id: payload.userId ?? 'local-user',
-      context: payload.context ?? null
+      session_id: payload.sessionId,
+      events: payload.events
     })
   })
 })
@@ -1756,13 +1947,25 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle('prechaos:baseline', async (_event, payload?: { userId?: string; features?: number[][] }) => {
-  if (payload?.features?.length) {
+ipcMain.handle(
+  'prechaos:baseline',
+  async (
+    _event,
+    payload?: {
+      userId?: string
+      sessionId?: string
+      sessionStartedAt?: number | null
+      events?: Array<Record<string, unknown>>
+    }
+  ) => {
+  if (payload?.events?.length) {
     return preChaosRequest('/baseline', {
       method: 'POST',
       body: JSON.stringify({
         user_id: payload.userId ?? 'local-user',
-        features: payload.features
+        session_id: payload.sessionId ?? 'session-baseline',
+        session_started_at: payload.sessionStartedAt ?? null,
+        events: payload.events
       })
     })
   }
@@ -1780,24 +1983,29 @@ ipcMain.handle(
     payload: {
       userId?: string
       sessionId: string
-      samples: Array<{
-        timestamp: number
-        features: number[]
-        context: Record<string, unknown>
-        prediction?: { risk: number; state: string; confidence: number } | null
-      }>
-      events?: Array<Record<string, unknown>>
+      sessionStartedAt?: number | null
+      writeToDataset: boolean
+      predict?: boolean
+      requestId?: string
+      events: Array<Record<string, unknown>>
     }
   ) => {
-    return preChaosRequest('/collect', {
+    const response = await preChaosRequest<Record<string, unknown>>('/collect', {
       method: 'POST',
       body: JSON.stringify({
         user_id: payload.userId ?? 'local-user',
         session_id: payload.sessionId,
-        samples: payload.samples,
-        events: payload.events ?? []
+        session_started_at: payload.sessionStartedAt ?? null,
+        write_to_dataset: payload.writeToDataset,
+        predict: payload.predict ?? true,
+        request_id: payload.requestId,
+        events: payload.events
       })
     })
+    return {
+      ...response,
+      requestId: payload.requestId
+    }
   }
 )
 
@@ -1816,6 +2024,13 @@ ipcMain.handle('prechaos:train-live', async () => {
 
 ipcMain.handle('prechaos:session-replays', async () => {
   return preChaosRequest('/sessions/replay', {
+    method: 'GET'
+  })
+})
+
+ipcMain.handle('prechaos:daily-rhythm', async (_event, payload?: { userId?: string }) => {
+  const userId = payload?.userId ? `?user_id=${encodeURIComponent(payload.userId)}` : ''
+  return preChaosRequest(`/daily-rhythm${userId}`, {
     method: 'GET'
   })
 })
@@ -2489,8 +2704,19 @@ ipcMain.on('window-maximize', (event) => {
   }
 })
 
+ipcMain.handle('window-get-bounds', (event) => {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender)
+  return senderWindow ? senderWindow.getBounds() : null
+})
+
 ipcMain.on('window-close', (event) => {
-  BrowserWindow.fromWebContents(event.sender)?.close()
+  const senderWindow = BrowserWindow.fromWebContents(event.sender)
+  if (!senderWindow) {
+    forceQuitApplication()
+    return
+  }
+
+  forceQuitApplication()
 })
 
 // ── App lifecycle ─────────────────────────────────────
@@ -2549,7 +2775,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isAppQuitting = true
-  if (preChaosState.process && !preChaosState.process.killed) {
-    preChaosState.process.kill()
-  }
+  stopPreChaosSidecar()
 })

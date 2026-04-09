@@ -1,63 +1,56 @@
 import { useEffect, useState } from 'react'
+
 import { PixelCharacter } from '@/components/dashboard/PixelCharacter'
+import { StreakCalendarStrip } from '@/components/gacha/StreakCalendarStrip'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
-import { Flame, CheckSquare, BookOpen, ShoppingBag, Sword, Heart, Wand2, Brain } from 'lucide-react'
-import { useProfile, useScraps, useStreak, useTodos, useHabits } from '@/hooks/use-data'
+import { StackedCardsIcon } from '@/components/ui/StackedCardsIcon'
+import { Flame, CheckSquare } from 'lucide-react'
+import { ACCOUNT_DATA_EVENT, LOCAL_STORAGE_EVENT, type LocalStorageChangeDetail } from '@/hooks/use-data'
+import { useProfile, useScraps, useStats, useStreak, useTodos, useHabits } from '@/hooks/use-data'
 import { formatLocalDate, getLocalToday } from '@/lib/date'
+import { FLASHCARDS_DATA_EVENT, loadFlashcardDeckSummaries, type FlashcardDeckSummary } from '@/lib/flashcards-data'
 import { defaultVaultConfig, getCurrentVaultPath, loadVaultConfig } from '@/lib/vault-config'
 import { DashboardRiskWidget } from '@/prechaos/DashboardRiskWidget'
-
-const nextUnlocks = [
-  { name: "Shadow Gi", price: 250, rarity: "Rare", color: "#4a6fa5" },
-  { name: "Ember Wraps", price: 500, rarity: "Epic", color: "#9b59b6" },
-  { name: "Dragon Scale", price: 1200, rarity: "Legendary", color: "#ff5625" },
-]
-
-const rarityColors: Record<string, { text: string }> = {
-  Rare: { text: "text-blue-400" },
-  Epic: { text: "text-purple-400" },
-  Legendary: { text: "text-[var(--nv-primary)]" },
-}
-
-// Mock flashcard data until integration
-const mockDecks = [
-  { name: 'DSA Concepts', dueToday: 8, newCards: 3 },
-  { name: 'OS Notes', dueToday: 12, newCards: 5 },
-]
-
-// Character stat definitions
-const characterStats = [
-  { name: 'STR', label: 'Strength', value: 12, max: 50, icon: Sword, color: 'var(--nv-primary)' },
-  { name: 'HP', label: 'Health', value: 30, max: 50, icon: Heart, color: 'var(--nv-danger)' },
-  { name: 'MAG', label: 'Magic', value: 8, max: 50, icon: Wand2, color: '#9b59b6' },
-  { name: 'INT', label: 'Intelligence', value: 18, max: 50, icon: Brain, color: 'var(--nv-secondary)' },
-]
 
 export default function DashboardPage() {
   const [profile] = useProfile()
   const [scraps] = useScraps()
+  const [stats] = useStats()
   const [streak] = useStreak()
   const [todos] = useTodos()
   const [habits] = useHabits()
   const [showVaultStats, setShowVaultStats] = useState(defaultVaultConfig.preferences.showVaultStats)
+  const [flashcardDecks, setFlashcardDecks] = useState<FlashcardDeckSummary[]>([])
+  const [isFlashcardsLoading, setIsFlashcardsLoading] = useState(true)
 
   const todayStr = getLocalToday()
-
-  const level = Math.max(1, Math.floor(Math.sqrt(scraps / 100)) + 1)
+  const derivedLevel = Math.max(1, Math.floor(Math.sqrt(scraps / 100)) + 1)
+  const level = Math.max(stats.level || 1, derivedLevel)
+  const totalXp = stats.xp || scraps
   const currentLevelMaxXP = Math.pow(level, 2) * 100
   const prevLevelMaxXP = Math.pow(level - 1, 2) * 100
-  const xpIntoCurrentLevel = scraps - prevLevelMaxXP
-  const xpNeededForCurrentLevel = currentLevelMaxXP - prevLevelMaxXP
+  const xpIntoCurrentLevel = Math.max(0, totalXp - prevLevelMaxXP)
+  const xpNeededForCurrentLevel = Math.max(1, currentLevelMaxXP - prevLevelMaxXP)
   const xpPercentage = Math.min(100, Math.max(0, (xpIntoCurrentLevel / xpNeededForCurrentLevel) * 100))
 
-  // Today's data
-  const todayTodos = todos.filter(t => t.dueDate === todayStr)
-  const todayTodosCompleted = todayTodos.filter(t => t.completed).length
+  const characterStats = [
+    { label: 'STR', value: stats.str || 12, color: '#f43f5e' },
+    { label: 'HP', value: stats.end || 30, color: '#22c55e' },
+    { label: 'MAG', value: Math.max(1, Math.round((stats.int || 12) * 0.8)), color: '#3b82f6' },
+    { label: 'INT', value: stats.int || 18, color: '#a855f7' }
+  ]
+  const sidebarStatBars = characterStats.map((stat) => ({
+    ...stat,
+    width: `${Math.min(100, Math.max(18, (stat.value / 40) * 100))}%`
+  }))
 
-  const todayHabitsCompleted = habits.filter(h => h.completedDates.includes(todayStr)).length
+  const todayTodos = todos.filter((todo) => todo.dueDate === todayStr)
+  const todayTodosCompleted = todayTodos.filter((todo) => todo.completed).length
+  const todayHabitsCompleted = habits.filter((habit) => habit.completedDates.includes(todayStr)).length
 
-  const totalFlashcardsDue = mockDecks.reduce((s, d) => s + d.dueToday, 0)
-  const totalFlashcardsNew = mockDecks.reduce((s, d) => s + d.newCards, 0)
+  const totalFlashcardsDue = flashcardDecks.reduce((sum, deck) => sum + deck.dueToday, 0)
+  const totalFlashcardsNew = flashcardDecks.reduce((sum, deck) => sum + deck.newCards, 0)
+  const activeFlashcardDecks = flashcardDecks.filter((deck) => deck.dueToday > 0 || deck.newCards > 0).length
 
   useEffect(() => {
     let cancelled = false
@@ -86,92 +79,131 @@ export default function DashboardPage() {
 
     void syncVaultPreferences()
 
-    const handleStorageUpdate = () => {
+    const handleVaultPathChange = (event?: Event) => {
+      if (event instanceof StorageEvent) {
+        if (event.key && event.key !== 'netherite-current-vault-path') {
+          return
+        }
+      } else if (event) {
+        const detail = (event as CustomEvent<LocalStorageChangeDetail>).detail
+        if (detail?.key && detail.key !== 'netherite-current-vault-path') {
+          return
+        }
+      }
+      void syncVaultPreferences()
+    }
+    const handleThemeAccountChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ filename?: string }>).detail
+      if (detail && detail.filename !== '*' && detail.filename !== 'themes') {
+        return
+      }
       void syncVaultPreferences()
     }
 
-    window.addEventListener('local-storage', handleStorageUpdate)
-    window.addEventListener('storage', handleStorageUpdate)
+    window.addEventListener(LOCAL_STORAGE_EVENT, handleVaultPathChange)
+    window.addEventListener('storage', handleVaultPathChange)
+    window.addEventListener(ACCOUNT_DATA_EVENT, handleThemeAccountChange)
 
     return () => {
       cancelled = true
-      window.removeEventListener('local-storage', handleStorageUpdate)
-      window.removeEventListener('storage', handleStorageUpdate)
+      window.removeEventListener(LOCAL_STORAGE_EVENT, handleVaultPathChange)
+      window.removeEventListener('storage', handleVaultPathChange)
+      window.removeEventListener(ACCOUNT_DATA_EVENT, handleThemeAccountChange)
     }
   }, [])
 
-  // Calculate streaks for each section
+  useEffect(() => {
+    let cancelled = false
+
+    const syncFlashcardDecks = async () => {
+      const decks = await loadFlashcardDeckSummaries()
+      if (!cancelled) {
+        setFlashcardDecks(decks)
+        setIsFlashcardsLoading(false)
+      }
+    }
+
+    void syncFlashcardDecks()
+
+    const handleDeckUpdate = () => {
+      void syncFlashcardDecks()
+    }
+
+    window.addEventListener(FLASHCARDS_DATA_EVENT, handleDeckUpdate)
+    window.addEventListener('focus', handleDeckUpdate)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(FLASHCARDS_DATA_EVENT, handleDeckUpdate)
+      window.removeEventListener('focus', handleDeckUpdate)
+    }
+  }, [])
+
   const todoStreak = (() => {
     let count = 0
-    const d = new Date()
-    for (let i = 0; i < 30; i++) {
-      const dateStr = formatLocalDate(d)
-      const dayTodos = todos.filter(t => t.dueDate === dateStr)
-      if (dayTodos.length > 0 && dayTodos.every(t => t.completed)) {
-        count++
+    const date = new Date()
+    for (let index = 0; index < 30; index += 1) {
+      const dateStr = formatLocalDate(date)
+      const dayTodos = todos.filter((todo) => todo.dueDate === dateStr)
+      if (dayTodos.length > 0 && dayTodos.every((todo) => todo.completed)) {
+        count += 1
       } else if (dayTodos.length > 0) {
         break
       }
-      d.setDate(d.getDate() - 1)
+      date.setDate(date.getDate() - 1)
     }
     return count
   })()
 
   const habitStreak = (() => {
     let count = 0
-    const d = new Date()
-    for (let i = 0; i < 30; i++) {
-      const dateStr = formatLocalDate(d)
-      if (habits.length > 0 && habits.every(h => h.completedDates.includes(dateStr))) {
-        count++
+    const date = new Date()
+    for (let index = 0; index < 30; index += 1) {
+      const dateStr = formatLocalDate(date)
+      if (habits.length > 0 && habits.every((habit) => habit.completedDates.includes(dateStr))) {
+        count += 1
       } else if (habits.length > 0) {
         break
       }
-      d.setDate(d.getDate() - 1)
+      date.setDate(date.getDate() - 1)
     }
     return count
   })()
 
   return (
     <div className="flex h-full w-full bg-[var(--nv-bg)] text-[var(--nv-foreground)]">
-      
-      {/* Main Content - 4 box grid */}
-      <main className="flex-1 flex flex-col p-8 md:p-12 overflow-y-auto no-scrollbar">
-        {/* Welcome Header */}
+      <main className="flex-1 overflow-y-auto p-8 md:p-12 no-scrollbar">
         <div className="mb-10">
           <p className="mb-1 text-[0.6rem] font-bold uppercase tracking-[0.3em] text-[var(--nv-subtle)]">Command Center</p>
           <h1 className="font-headline text-3xl font-extrabold text-[var(--nv-foreground)]">
-            Welcome back, <span className="text-[var(--nv-secondary)]">{profile.name || "Adventurer"}</span>
+            Welcome back, <span className="text-[var(--nv-secondary)]">{profile.name || 'Adventurer'}</span>
           </h1>
         </div>
 
-        {/* 2x2 Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1 max-w-4xl">
-          
-          {/* To-Do */}
-          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-6 flex flex-col hover:border-[var(--nv-primary)] transition-colors max-h-[280px]">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[var(--nv-primary-soft)] rounded-lg flex items-center justify-center">
-                <CheckSquare className="w-4 h-4 text-[var(--nv-primary)]" />
+        <div className="grid max-w-5xl grid-cols-1 gap-6 md:grid-cols-2 md:auto-rows-[minmax(332px,1fr)]">
+          <div className="min-h-[332px] rounded-lg border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 transition-colors hover:border-[var(--nv-primary)]">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--nv-primary-soft)]">
+                <CheckSquare className="h-4 w-4 text-[var(--nv-primary)]" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-[var(--nv-primary)] uppercase tracking-wider">To-Do</h3>
-                  {todoStreak > 0 && (
-                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[var(--nv-primary-soft)] rounded">
-                      <Flame className="w-3 h-3 text-[var(--nv-primary)]" />
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--nv-primary)]">To-Do</h3>
+                  {todoStreak > 0 ? (
+                    <div className="flex items-center gap-1 rounded bg-[var(--nv-primary-soft)] px-1.5 py-0.5">
+                      <Flame className="h-3 w-3 text-[var(--nv-primary)]" />
                       <span className="text-[0.5rem] font-bold text-[var(--nv-primary)]">{todoStreak}</span>
                     </div>
-                  )}
+                  ) : null}
                 </div>
-                <p className="text-[0.55rem] text-[var(--nv-subtle)] uppercase tracking-widest font-bold">{todayTodosCompleted}/{todayTodos.length} done</p>
+                <p className="text-[0.55rem] font-bold uppercase tracking-widest text-[var(--nv-subtle)]">{todayTodosCompleted}/{todayTodos.length} done</p>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto no-scrollbar space-y-1.5">
+            <div className="space-y-1.5 overflow-y-auto no-scrollbar">
               {todayTodos.length > 0 ? (
-                todayTodos.map(todo => (
-                  <div key={todo.id} className={`flex items-center gap-2 py-1.5 px-2 rounded text-sm ${todo.completed ? 'text-[var(--nv-subtle)] line-through' : 'text-[var(--nv-foreground)]'}`}>
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${todo.completed ? 'bg-[var(--nv-primary)]' : 'bg-[var(--nv-border)]'}`} />
+                todayTodos.map((todo) => (
+                  <div key={todo.id} className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${todo.completed ? 'text-[var(--nv-subtle)] line-through' : 'text-[var(--nv-foreground)]'}`}>
+                    <div className={`h-2 w-2 shrink-0 rounded-full ${todo.completed ? 'bg-[var(--nv-primary)]' : 'bg-[var(--nv-border)]'}`} />
                     <span className="truncate">{todo.title}</span>
                   </div>
                 ))
@@ -181,32 +213,31 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Habits */}
-          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-6 flex flex-col hover:border-[var(--nv-primary)] transition-colors max-h-[280px]">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[var(--nv-danger-soft)] rounded-lg flex items-center justify-center">
-                <Flame className="w-4 h-4 text-[var(--nv-danger)]" />
+          <div className="min-h-[332px] rounded-lg border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 transition-colors hover:border-[var(--nv-primary)]">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--nv-danger-soft)]">
+                <Flame className="h-4 w-4 text-[var(--nv-danger)]" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-[var(--nv-danger)] uppercase tracking-wider">Habits</h3>
-                  {habitStreak > 0 && (
-                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[var(--nv-danger-soft)] rounded">
-                      <Flame className="w-3 h-3 text-[var(--nv-danger)]" />
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--nv-danger)]">Habits</h3>
+                  {habitStreak > 0 ? (
+                    <div className="flex items-center gap-1 rounded bg-[var(--nv-danger-soft)] px-1.5 py-0.5">
+                      <Flame className="h-3 w-3 text-[var(--nv-danger)]" />
                       <span className="text-[0.5rem] font-bold text-[var(--nv-danger)]">{habitStreak}</span>
                     </div>
-                  )}
+                  ) : null}
                 </div>
-                <p className="text-[0.55rem] text-[var(--nv-subtle)] uppercase tracking-widest font-bold">{todayHabitsCompleted}/{habits.length} done</p>
+                <p className="text-[0.55rem] font-bold uppercase tracking-widest text-[var(--nv-subtle)]">{todayHabitsCompleted}/{habits.length} done</p>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto no-scrollbar space-y-1.5">
+            <div className="space-y-1.5 overflow-y-auto no-scrollbar">
               {habits.length > 0 ? (
-                habits.map(habit => {
+                habits.map((habit) => {
                   const done = habit.completedDates.includes(todayStr)
                   return (
-                    <div key={habit.id} className={`flex items-center gap-2 py-1.5 px-2 rounded text-sm ${done ? 'text-[var(--nv-subtle)] line-through' : 'text-[var(--nv-foreground)]'}`}>
-                      <div className={`w-2 h-2 rounded-full shrink-0 ${done ? 'bg-[var(--nv-danger)]' : 'bg-[var(--nv-border)]'}`} />
+                    <div key={habit.id} className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${done ? 'text-[var(--nv-subtle)] line-through' : 'text-[var(--nv-foreground)]'}`}>
+                      <div className={`h-2 w-2 shrink-0 rounded-full ${done ? 'bg-[var(--nv-danger)]' : 'bg-[var(--nv-border)]'}`} />
                       <span className="truncate">{habit.title}</span>
                     </div>
                   )
@@ -217,173 +248,117 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Flashcard Due */}
-          <div className="bg-[var(--nv-surface)] border border-[var(--nv-border)] rounded-lg p-6 flex flex-col hover:border-[var(--nv-primary)] transition-colors max-h-[280px]">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-[var(--nv-secondary-soft)] rounded-lg flex items-center justify-center">
-                <BookOpen className="w-4 h-4 text-[var(--nv-secondary)]" />
+          <div className="min-h-[332px] rounded-lg border border-[var(--nv-border)] bg-[var(--nv-surface)] p-6 transition-colors hover:border-[var(--nv-primary)]">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--nv-secondary-soft)]">
+                <StackedCardsIcon className="h-4 w-4 text-[var(--nv-secondary)]" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-[var(--nv-secondary)] uppercase tracking-wider">Flashcards</h3>
-                  <div className="flex items-center gap-1 px-1.5 py-0.5 bg-[var(--nv-secondary-soft)] rounded">
-                    <Flame className="w-3 h-3 text-[var(--nv-secondary)]" />
-                    <span className="text-[0.5rem] font-bold text-[var(--nv-secondary)]">12</span>
-                  </div>
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--nv-secondary)]">Flashcards</h3>
+                  {activeFlashcardDecks > 0 ? (
+                    <div className="flex items-center gap-1 rounded bg-[var(--nv-secondary-soft)] px-1.5 py-0.5">
+                      <Flame className="h-3 w-3 text-[var(--nv-secondary)]" />
+                      <span className="text-[0.5rem] font-bold text-[var(--nv-secondary)]">{activeFlashcardDecks}</span>
+                    </div>
+                  ) : null}
                 </div>
-                <p className="text-[0.55rem] text-[var(--nv-subtle)] uppercase tracking-widest font-bold">{totalFlashcardsDue} due · {totalFlashcardsNew} new</p>
+                <p className="text-[0.55rem] font-bold uppercase tracking-widest text-[var(--nv-subtle)]">{totalFlashcardsDue} due / {totalFlashcardsNew} new</p>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto no-scrollbar space-y-1.5">
-              {mockDecks.map((deck, i) => (
-                <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded text-sm text-[var(--nv-foreground)]">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[var(--nv-secondary)] shrink-0" />
-                    <span className="truncate">{deck.name}</span>
+            <div className="space-y-1.5 overflow-y-auto no-scrollbar">
+              {flashcardDecks.length > 0 ? (
+                flashcardDecks.map((deck) => (
+                  <div key={deck.id} className="flex items-center justify-between gap-3 rounded px-2 py-1.5 text-sm text-[var(--nv-foreground)]">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="h-2 w-2 shrink-0 rounded-full bg-[var(--nv-secondary)]" />
+                      <span className="truncate">{deck.name}</span>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      {deck.dueToday > 0 ? (
+                        <span className="block text-[0.55rem] font-bold uppercase text-[var(--nv-danger)]">{deck.dueToday} due</span>
+                      ) : deck.newCards > 0 ? (
+                        <span className="block text-[0.55rem] font-bold uppercase text-[var(--nv-secondary)]">{deck.newCards} new</span>
+                      ) : null}
+                    </div>
                   </div>
-                  <span className="text-[0.55rem] font-bold text-[var(--nv-danger)] uppercase shrink-0">{deck.dueToday} due</span>
+                ))
+              ) : (
+                <p className="text-xs text-[var(--nv-subtle)]">
+                  {isFlashcardsLoading ? 'Loading flashcard decks...' : 'No flashcard decks found in your vault'}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <DashboardRiskWidget />
+        </div>
+      </main>
+
+      <aside
+        className={`${
+          showVaultStats ? 'flex' : 'hidden'
+        } h-[calc(100vh-48px)] w-[300px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-[var(--nv-border)] bg-[var(--nv-bg)] p-4 no-scrollbar`}
+      >
+        <section className="shrink-0 overflow-hidden rounded-[12px] border border-[var(--nv-border)] bg-[var(--nv-surface-strong)]">
+          <div className="grid grid-cols-[minmax(0,1fr)_108px] gap-2.5 p-4">
+            <div className="rounded-[10px] border-none bg-transparent pt-2">
+              <div className="flex min-h-[142px] items-end justify-center pb-2 pt-2">
+                <div className="mt-2 scale-[1.14] origin-bottom">
+                  <PixelCharacter gender={profile.gender} />
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {sidebarStatBars.map((stat) => (
+                <div key={stat.label} className="rounded-[8px] border border-[var(--nv-border)] bg-[var(--nv-surface)] px-2.5 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--nv-subtle)]">{stat.label}</span>
+                    <span className="text-[10px] font-black" style={{ color: stat.color }}>{stat.value}</span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--nv-bg)]">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: stat.width, backgroundColor: stat.color }}
+                    />
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <DashboardRiskWidget />
-
-        </div>
-      </main>
-
-      {/* Right Sidebar — Character + Stats */}
-      <aside className={`${showVaultStats ? 'flex' : 'hidden'} h-[calc(100vh-48px)] w-80 shrink-0 flex-col overflow-y-auto border-l border-[var(--nv-border)] bg-[var(--nv-bg)] no-scrollbar`}>
-        
-        {/* Character Display */}
-        <div className="flex flex-col items-center p-6 relative">
-          <div className="flex items-start gap-4 w-full">
-            {/* Character */}
-            <div className="flex flex-col items-center flex-1">
-              <div className="char-bounce w-[10rem] h-[10rem] z-10">
-                <PixelCharacter gender={profile.gender} />
-              </div>
-              <div className="w-24 h-3 bg-black/40 blur-md rounded-full mt-[-6px]" />
-              
-              {/* Class Badge */}
-              <div className="mt-3 px-4 py-1.5 bg-[var(--nv-secondary-soft)] border border-[var(--nv-secondary)] rounded-lg">
-                <span className="text-[0.6rem] font-bold uppercase tracking-[0.3em] text-[var(--nv-secondary)]">Beginner</span>
-              </div>
-            </div>
-
-            {/* Character Stats */}
-            <div className="flex min-w-[118px] flex-col gap-3.5 pt-2">
-              {characterStats.map((stat) => {
-                const StatIcon = stat.icon
-                const pct = Math.min(100, (stat.value / stat.max) * 100)
-                return (
-                  <div
-                    key={stat.name}
-                    className="border border-[var(--nv-border)] bg-[rgba(18,14,14,0.92)] px-2.5 py-2 shadow-[0_0_16px_rgba(0,0,0,0.2)]"
-                  >
-                    <div className="mb-1.5 flex items-center gap-2">
-                      <div
-                        className="flex h-5 w-5 shrink-0 items-center justify-center border border-[var(--nv-border)] bg-black/35"
-                        style={{ boxShadow: `0 0 10px ${stat.color}25` }}
-                      >
-                        <StatIcon className="h-3 w-3" style={{ color: stat.color }} />
-                      </div>
-                      <span className="text-[0.58rem] font-black uppercase tracking-[0.24em] text-[var(--nv-foreground)]">
-                        {stat.name}
-                      </span>
-                      <span
-                        className="ml-auto text-[0.65rem] font-black"
-                        style={{ color: stat.color, textShadow: `0 0 10px ${stat.color}55` }}
-                      >
-                        {stat.value}
-                      </span>
-                    </div>
-                    <div className="h-2 overflow-hidden border border-[var(--nv-border)] bg-[var(--nv-surface-strong)]">
-                      <div
-                        className="h-full transition-all duration-500"
-                        style={{
-                          width: `${pct}%`,
-                          backgroundColor: stat.color,
-                          backgroundImage: `repeating-linear-gradient(90deg, ${stat.color} 0 9px, rgba(255,255,255,0.18) 9px 10px)`,
-                          boxShadow: `0 0 10px ${stat.color}80`
-                        }}
-                      />
-                    </div>
-                    <p className="mt-1.5 text-[0.5rem] font-bold uppercase tracking-[0.22em] text-[var(--nv-secondary)]/90">
-                      {stat.label}
-                    </p>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="p-6 border-t border-[var(--nv-border)] space-y-4">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-[var(--nv-secondary-soft)] rounded-lg flex items-center justify-center">
-              <span className="text-[var(--nv-secondary)] font-extrabold text-sm font-headline">{level}</span>
-            </div>
-            <div className="flex flex-col flex-1">
-              <p className="text-sm font-bold text-white uppercase tracking-widest font-headline">Level {level}</p>
-              <div className="flex justify-between text-[0.55rem] uppercase tracking-widest font-bold text-[var(--nv-subtle)] mt-1">
-                <span>{xpIntoCurrentLevel} XP</span>
-                <span>{currentLevelMaxXP} XP</span>
-              </div>
-              <div className="h-1 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-full overflow-hidden mt-1">
-                <div
-                  className="h-full bg-[var(--nv-primary)] rounded-full shadow-[0_0_6px_var(--nv-primary-glow)] transition-all duration-500"
-                  style={{ width: `${xpPercentage}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between p-3 bg-[var(--nv-surface-strong)] rounded-lg border border-[var(--nv-border)]">
-            <div className="flex items-center gap-2">
-              <NetheriteScrapIcon size={16} />
-              <span className="text-sm font-bold text-white font-headline">{scraps || 0}</span>
-              <span className="text-[0.55rem] uppercase tracking-widest font-bold text-[var(--nv-muted)]">Scraps</span>
-            </div>
-            <ShoppingBag className="w-4 h-4 text-[var(--nv-secondary)]" />
-          </div>
-        </div>
-
-        {/* Next Unlocks */}
-        <div className="p-6 border-t border-[var(--nv-border)]">
-          <h3 className="text-[0.6rem] uppercase tracking-[0.3em] font-bold text-[var(--nv-muted)] mb-4">Next Unlocks</h3>
-          <div className="space-y-3">
-            {nextUnlocks.map((item) => {
-              const rarity = rarityColors[item.rarity]
-              return (
-                <div key={item.name} className="flex items-center gap-3 p-3 bg-[var(--nv-surface-strong)] border border-[var(--nv-border)] rounded-lg group hover:border-[var(--nv-primary)] transition-all">
-                  {/* Item thumbnail instead of Lock */}
-                  <div
-                    className="w-8 h-8 rounded flex items-center justify-center shrink-0 border border-[var(--nv-border)]"
-                    style={{ background: `linear-gradient(135deg, ${item.color}30, ${item.color}10)` }}
-                  >
-                    <div
-                      className="w-4 h-4 rounded-sm"
-                      style={{
-                        background: `linear-gradient(135deg, ${item.color}, ${item.color}80)`,
-                        boxShadow: `0 0 6px ${item.color}40`,
-                      }}
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-white truncate">{item.name}</p>
-                    <span className={`text-[0.55rem] font-bold uppercase tracking-wider ${rarity.text}`}>{item.rarity}</span>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-[0.6rem] font-bold text-[var(--nv-secondary)] uppercase tracking-wider">{item.price}</span>
-                    <NetheriteScrapIcon size={12} />
-                  </div>
+          <div className="space-y-3 px-4 pb-4 pt-2">
+            <div className="rounded-[8px] border border-[var(--nv-border)] bg-[var(--nv-surface)] px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-[var(--nv-primary)]">
+                    LVL
+                  </span>
+                  <span className="text-sm font-black text-[var(--nv-foreground)]">Level {level}</span>
                 </div>
-              )
-            })}
+                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--nv-subtle)]">{xpIntoCurrentLevel}/{xpNeededForCurrentLevel}</span>
+              </div>
+              <div className="mt-3 h-[3px] overflow-hidden rounded-full bg-[var(--nv-bg)]">
+                <div className="h-full rounded-full bg-[var(--nv-primary)]" style={{ width: `${xpPercentage}%` }} />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-[8px] border border-[var(--nv-border)] bg-[var(--nv-surface)] px-3 py-2.5">
+              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--nv-subtle)]">SCRAPS</span>
+              <div className="flex items-center gap-2">
+                <NetheriteScrapIcon size={15} />
+                <span className="text-base font-black text-[var(--nv-foreground)]">{scraps || 0}</span>
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
+
+        <StreakCalendarStrip
+          currentStreak={streak.count}
+          compact
+          title="STREAK REWARDS"
+          subtitle="Compact milestone calendar"
+        />
       </aside>
     </div>
   )

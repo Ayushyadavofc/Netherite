@@ -3,7 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { defaultVaultConfig } from '@/lib/vault-config'
 import { useAuthStore } from '@/stores/authStore'
 
-const ACCOUNT_DATA_EVENT = 'account-data-changed'
+export const ACCOUNT_DATA_EVENT = 'account-data-changed'
+export const LOCAL_STORAGE_EVENT = 'local-storage'
+export type LocalStorageChangeDetail = {
+  key?: string | null
+}
 const migratedUsers = new Map<string, Promise<void>>()
 const DEVICE_VAULT_PATHS_KEY = 'netherite-device-vault-paths'
 const DEVICE_VAULT_SNAPSHOT_KEY = 'netherite-device-vault-snapshots'
@@ -22,47 +26,83 @@ const defaultThemeSettings = {
   customPalette: { ...defaultVaultConfig.theme.customPalette }
 } satisfies Record<string, unknown>
 
+export function dispatchLocalStorageChange(key?: string | null) {
+  window.dispatchEvent(
+    new CustomEvent<LocalStorageChangeDetail>(LOCAL_STORAGE_EVENT, {
+      detail: { key: key ?? null }
+    })
+  )
+}
+
 function setLocalStorage(key: string, value: unknown) {
   try {
     const stringValue = JSON.stringify(value)
     window.localStorage.setItem(key, stringValue)
-    window.dispatchEvent(new Event('local-storage'))
+    dispatchLocalStorageChange(key)
   } catch (error) {
     console.warn(`Error setting localStorage ${key}:`, error)
   }
 }
 
 export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T | ((val: T) => T)) => void] {
+  const rawValueRef = useRef<string | null>(null)
   const [storedValue, setStoredValue] = useState<T>(() => {
     try {
       const item = window.localStorage.getItem(key)
+      rawValueRef.current = item
       return item ? JSON.parse(item) : initialValue
     } catch (error) {
       console.warn(`Error reading localStorage ${key}:`, error)
+      rawValueRef.current = null
       return initialValue
     }
   })
 
   useEffect(() => {
-    const handleStorageChange = () => {
+    rawValueRef.current = (() => {
+      try {
+        return JSON.stringify(storedValue)
+      } catch {
+        return null
+      }
+    })()
+  }, [storedValue])
+
+  useEffect(() => {
+    const syncFromStorage = () => {
       try {
         const item = window.localStorage.getItem(key)
-        if (item) {
-          setStoredValue(JSON.parse(item))
+        if (item === rawValueRef.current) {
+          return
         }
+        rawValueRef.current = item
+        setStoredValue(item ? JSON.parse(item) : initialValue)
       } catch (error) {
         console.warn(`Error updating from localStorage ${key}:`, error)
       }
     }
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key && event.key !== key) {
+        return
+      }
+      syncFromStorage()
+    }
+    const handleCustomStorageChange = (event: Event) => {
+      const detail = (event as CustomEvent<LocalStorageChangeDetail>).detail
+      if (detail?.key && detail.key !== key) {
+        return
+      }
+      syncFromStorage()
+    }
 
     window.addEventListener('storage', handleStorageChange)
-    window.addEventListener('local-storage', handleStorageChange)
+    window.addEventListener(LOCAL_STORAGE_EVENT, handleCustomStorageChange)
 
     return () => {
       window.removeEventListener('storage', handleStorageChange)
-      window.removeEventListener('local-storage', handleStorageChange)
+      window.removeEventListener(LOCAL_STORAGE_EVENT, handleCustomStorageChange)
     }
-  }, [key])
+  }, [initialValue, key])
 
   const setValue = (value: T | ((val: T) => T)) => {
     try {
@@ -293,6 +333,16 @@ export interface Habit {
   difficulty: number
   completedDates: string[]
   createdAt: number
+  completion_history_30d?: boolean[]
+  current_streak?: number
+  longest_streak?: number
+  time_anchored?: boolean
+  skip_days?: number[]
+  permanence_score?: number
+  completionHours?: Record<string, number>
+  skippedDates?: string[]
+  anchorWindowStartHour?: number | null
+  offAnchorCompletionRun?: number
 }
 
 export interface Todo {
@@ -304,6 +354,32 @@ export interface Todo {
   completed: boolean
   completedAt?: number
   createdAt: number
+  estimatedMinutes?: number
+  manualDifficultyTag?: TodoDifficultyTag | null
+  scheduledTime?: string | null
+  is_study_task?: boolean
+}
+
+export type TodoDifficultyTag = 'easy' | 'medium' | 'hard'
+export type TodoMomentumBucket = 'morning' | 'afternoon' | 'evening' | 'night'
+export type TodoMomentumOutcome = 'completed' | 'skipped'
+
+export interface TodoMomentumState {
+  momentum_score: number
+  streak_count: number
+  recent_failure_flag: boolean
+  last_completed_at: string | null
+  hourly_completion_rate: Record<TodoMomentumBucket, number>
+  last_activity_at: string | null
+  last_idle_penalty_at: string | null
+  recent_outcomes: TodoMomentumOutcome[]
+  hourly_completion_attempts: Record<TodoMomentumBucket, number>
+  hourly_completion_completions: Record<TodoMomentumBucket, number>
+}
+
+export interface TodoMomentumContext {
+  weak_habit_day: boolean
+  weak_habit_day_date?: string | null
 }
 
 export type StoredVaultEntry = {
@@ -464,6 +540,41 @@ export const rememberDeviceVault = (vaultId: string | undefined, name: string, p
 
 export const useHabits = () => useAccountFile<Habit[]>('habits', [])
 export const useTodos = () => useAccountFile<Todo[]>('todos', [])
+const defaultHourlyCompletionRates: Record<TodoMomentumBucket, number> = {
+  morning: 0,
+  afternoon: 0,
+  evening: 0,
+  night: 0
+}
+
+export const defaultTodoMomentumState: TodoMomentumState = {
+  momentum_score: 50,
+  streak_count: 0,
+  recent_failure_flag: false,
+  last_completed_at: null,
+  hourly_completion_rate: { ...defaultHourlyCompletionRates },
+  last_activity_at: null,
+  last_idle_penalty_at: null,
+  recent_outcomes: [],
+  hourly_completion_attempts: { ...defaultHourlyCompletionRates },
+  hourly_completion_completions: { ...defaultHourlyCompletionRates }
+}
+
+export const defaultTodoMomentumContext: TodoMomentumContext = {
+  weak_habit_day: false,
+  weak_habit_day_date: null
+}
+
+export const useTodoMomentum = () =>
+  useAccountFile<TodoMomentumState>('todo-momentum', defaultTodoMomentumState, {
+    persistInitialValueOnMissing: true
+  })
+
+export const useTodoMomentumContext = () =>
+  useAccountFile<TodoMomentumContext>('todo-momentum-context', defaultTodoMomentumContext, {
+    persistInitialValueOnMissing: true
+  })
+
 export const useVaultSettings = () =>
   useAccountFile<Record<string, unknown>>('themes', defaultThemeSettings, {
     persistInitialValueOnMissing: true
@@ -477,19 +588,8 @@ export function updateScraps(amount: number) {
 }
 
 export function scrapRewardForDifficulty(stars: number): number {
-  switch (stars) {
-    case 0:
-      return 0
-    case 5:
-      return 55
-    case 4:
-      return 35
-    case 3:
-      return 20
-    case 2:
-      return 10
-    case 1:
-    default:
-      return 5
-  }
+  if (stars <= 0) return 0
+  if (stars >= 4) return 50
+  if (stars >= 3) return 20
+  return 5
 }

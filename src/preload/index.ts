@@ -10,8 +10,18 @@ const runtimeConfig = (() => {
   }
 })()
 
+const appLaunchId = (() => {
+  try {
+    return ipcRenderer.sendSync('app:getLaunchIdSync') as string
+  } catch {
+    return 'unknown-launch'
+  }
+})()
+
 contextBridge.exposeInMainWorld('electronAPI', {
   runtimeConfig,
+  appLaunchId,
+  appLog: (message: string) => ipcRenderer.invoke('app:log', message),
   // Account data: lets the signed-in renderer load and persist per-user JSON files.
   readAccountFile: <T = unknown>(userId: string, filename: string) =>
     ipcRenderer.invoke('readAccountFile', userId, filename) as Promise<T | null>,
@@ -110,50 +120,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   preChaosState: () => ipcRenderer.invoke('prechaos:state'),
   preChaosLog: (message: string) => ipcRenderer.invoke('prechaos:log', message),
   preChaosPredict: (
-    features: number[][],
-    userId?: string,
-    context?: {
-      route: string
-      page_name: 'landing' | 'notes' | 'flashcards' | 'todos' | 'habits' | 'analytics' | 'other'
-      productive_context: boolean
-      focused_editable: boolean
-      recent_meaningful_actions: number
-      recent_event_density: number
-      route_switches: number
-      route_dwell_seconds: number
-      note_activity: number
-      note_switches: number
-      note_saves: number
-      flashcard_activity: number
-      flashcard_answer_latency: number
-      flashcard_successes: number
-      todo_activity: number
-      todo_completions: number
-      habit_activity: number
-      habit_check_ins: number
-      progress_events: number
-      reading_mode: boolean
-      webcam_opt_in: boolean
-    }
-  ) => ipcRenderer.invoke('prechaos:predict', { features, userId, context }),
+    events: Array<Record<string, unknown>>,
+    sessionId: string,
+    userId?: string
+  ) => ipcRenderer.invoke('prechaos:predict', { events, sessionId, userId }),
   preChaosFeedback: (payload: { userId?: string; label: 'focused' | 'thinking' | 'distracted' | 'tired'; risk: number }) =>
     ipcRenderer.invoke('prechaos:feedback', payload),
-  preChaosBaseline: (payload?: { userId?: string; features?: number[][] }) =>
+  preChaosBaseline: (payload?: { userId?: string; sessionId?: string; sessionStartedAt?: number | null; events?: Array<Record<string, unknown>> }) =>
     ipcRenderer.invoke('prechaos:baseline', payload),
   preChaosCollect: (payload: {
     userId?: string
     sessionId: string
-    samples: Array<{
-      timestamp: number
-      features: number[]
-      context: Record<string, unknown>
-      prediction?: { risk: number; state: string; confidence: number } | null
-    }>
-    events?: Array<Record<string, unknown>>
+    sessionStartedAt?: number | null
+    writeToDataset: boolean
+    predict?: boolean
+    requestId?: string
+    events: Array<Record<string, unknown>>
   }) => ipcRenderer.invoke('prechaos:collect', payload),
   preChaosDatasetStatus: () => ipcRenderer.invoke('prechaos:dataset-status'),
   preChaosTrainLive: () => ipcRenderer.invoke('prechaos:train-live'),
   preChaosSessionReplays: () => ipcRenderer.invoke('prechaos:session-replays'),
+  preChaosDailyRhythm: (payload?: { userId?: string }) => ipcRenderer.invoke('prechaos:daily-rhythm', payload),
   preChaosCameraModuleOpen: () =>
     ipcRenderer.invoke('prechaos:camera-module-open') as Promise<CameraModuleSnapshot>,
   preChaosCameraModuleClose: () =>
@@ -174,6 +161,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Window controls: renderer needs these to drive the custom chrome buttons.
+  getWindowBounds: () =>
+    ipcRenderer.invoke('window-get-bounds') as Promise<{ x: number; y: number; width: number; height: number } | null>,
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close')

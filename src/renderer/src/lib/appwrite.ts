@@ -1,7 +1,16 @@
-import { Account, Client, Databases, Storage } from 'appwrite'
+import { Account, Client, Databases, Functions, Storage } from 'appwrite'
 import { APPWRITE_CONFIG_KEYS, createEmptyRuntimeConfig } from '../../../shared/runtime-config'
 
-const REQUIRED_APPWRITE_ENV_KEYS = APPWRITE_CONFIG_KEYS as ReadonlyArray<keyof ImportMetaEnv>
+const REQUIRED_APPWRITE_ENV_KEYS = [
+  'VITE_APPWRITE_ENDPOINT',
+  'VITE_APPWRITE_PROJECT_ID',
+  'VITE_APPWRITE_DATABASE_ID',
+  'VITE_APPWRITE_USER_SETTINGS_COLLECTION_ID',
+  'VITE_APPWRITE_VAULT_SNAPSHOTS_COLLECTION_ID',
+  'VITE_APPWRITE_SYNC_MANIFESTS_COLLECTION_ID',
+  'VITE_APPWRITE_SNAPSHOTS_BUCKET_ID',
+  'VITE_APPWRITE_AVATARS_BUCKET_ID'
+] as const satisfies ReadonlyArray<keyof ImportMetaEnv>
 
 const runtimeConfig =
   typeof window !== 'undefined' ? window.electronAPI?.runtimeConfig ?? createEmptyRuntimeConfig() : createEmptyRuntimeConfig()
@@ -22,6 +31,12 @@ export const VAULT_SNAPSHOTS_COLLECTION_ID = readEnv('VITE_APPWRITE_VAULT_SNAPSH
 export const SYNC_MANIFESTS_COLLECTION_ID = readEnv('VITE_APPWRITE_SYNC_MANIFESTS_COLLECTION_ID')
 export const SNAPSHOTS_BUCKET_ID = readEnv('VITE_APPWRITE_SNAPSHOTS_BUCKET_ID')
 export const AVATARS_BUCKET_ID = readEnv('VITE_APPWRITE_AVATARS_BUCKET_ID')
+export const GACHA_USERS_COLLECTION_ID = readEnv('VITE_APPWRITE_GACHA_USERS_COLLECTION_ID')
+export const GACHA_INVENTORY_COLLECTION_ID = readEnv('VITE_APPWRITE_GACHA_INVENTORY_COLLECTION_ID')
+export const GACHA_COSMETICS_COLLECTION_ID = readEnv('VITE_APPWRITE_GACHA_COSMETICS_COLLECTION_ID')
+export const GACHA_CHESTS_COLLECTION_ID = readEnv('VITE_APPWRITE_GACHA_CHESTS_COLLECTION_ID')
+export const OPEN_CHEST_FUNCTION_ID = readEnv('VITE_APPWRITE_OPEN_CHEST_FUNCTION_ID')
+export const SYNC_GACHA_PROFILE_FUNCTION_ID = readEnv('VITE_APPWRITE_SYNC_GACHA_PROFILE_FUNCTION_ID')
 
 export const client = new Client()
 
@@ -47,6 +62,7 @@ export const setAppwriteProjectId = (projectId: string) => {
 
 export const account = new Account(client)
 export const databases = new Databases(client)
+export const functions = new Functions(client)
 export const storage = new Storage(client)
 
 export const DATABASE_ID = APPWRITE_DATABASE_ID

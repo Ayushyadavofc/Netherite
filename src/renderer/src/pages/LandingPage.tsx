@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FolderOpen, FolderPlus, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
+import appIcon from '../../../../app-icon.png'
 
 import ProfileButton from '@/components/ProfileButton'
 import TitleBar from '@/components/TitleBar'
 import {
+  dispatchLocalStorageChange,
   ensureGuestMigration,
   getDeviceVaultPath,
   rememberDeviceVault,
@@ -120,7 +122,7 @@ function setCurrentVaultSelection(vault: { id: string; name: string; dirPath: st
   } else {
     localStorage.removeItem('netherite-current-vault-path')
   }
-  window.dispatchEvent(new Event('local-storage'))
+  dispatchLocalStorageChange('netherite-current-vault-path')
 }
 
 function dedupeStoredVaultEntries(entries: StoredVaultEntry[]) {
@@ -882,7 +884,7 @@ export default function LandingPage() {
       <main className="mx-auto -mt-16 flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6">
         <div className="mb-12 flex flex-col items-center">
           <div className="mb-2 flex items-center gap-2">
-            <span className="text-4xl text-[var(--nv-primary)]">&#x2B21;</span>
+            <img src={appIcon} alt="Netherite" className="h-10 w-10 object-contain" />
             <span className="text-3xl font-bold tracking-tight text-[var(--nv-foreground)]">Netherite</span>
           </div>
           <p className="text-sm tracking-wide text-[var(--nv-muted)]">Your second brain. Built different.</p>

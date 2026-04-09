@@ -1,30 +1,24 @@
 import { useEffect, useState } from 'react'
 
 const SPLASH_DURATION = 1800
+const getSplashStorageKey = () => `netherite-splash-shown:${window.electronAPI?.appLaunchId ?? 'unknown-launch'}`
 
 export function SplashScreen() {
   const [show, setShow] = useState(true)
-  const isDev = window.location.protocol === 'http:' || window.location.protocol === 'https:'
 
   useEffect(() => {
-    if (isDev) {
-      const timer = window.setTimeout(() => {
-        setShow(false)
-      }, SPLASH_DURATION)
-      return () => window.clearTimeout(timer)
-    }
-
-    const hasShown = sessionStorage.getItem('splashShown')
+    const storageKey = getSplashStorageKey()
+    const hasShown = window.localStorage.getItem(storageKey)
     if (hasShown) {
       setShow(false)
       return
     }
-    sessionStorage.setItem('splashShown', 'true')
+    window.localStorage.setItem(storageKey, 'true')
     const timer = window.setTimeout(() => {
       setShow(false)
     }, SPLASH_DURATION)
     return () => window.clearTimeout(timer)
-  }, [isDev])
+  }, [])
 
   if (!show) return null
 

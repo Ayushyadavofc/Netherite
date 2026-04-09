@@ -18,6 +18,18 @@ export function WebcamHud() {
   const cameraUnavailable = webcamState === 'blocked'
 
   useEffect(() => {
+    const mounted = `[RENDERER][${new Date().toISOString()}] WebcamHud MOUNTED`
+    console.log(mounted)
+    void window.electronAPI.appLog(mounted)
+
+    return () => {
+      const unmounted = `[RENDERER][${new Date().toISOString()}] WebcamHud UNMOUNTED`
+      console.log(unmounted)
+      void window.electronAPI.appLog(unmounted)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!videoRef.current) {
       return
     }
