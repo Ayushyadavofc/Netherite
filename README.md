@@ -126,6 +126,24 @@ npm run dist:win
 
 The installer will be generated in the `release/` folder.
 
+### 7. Create a Portable Windows EXE
+
+```bash
+npm run dist:win:portable
+```
+
+The portable executable will be generated in the `release/` folder as `Netherite Portable <version>.exe`.
+
+### 8. Publish the Portable EXE to GitHub Releases
+
+Using the GitHub CLI in Windows PowerShell:
+
+```powershell
+$version = (Get-Content package.json | ConvertFrom-Json).version
+$repo = "OWNER/REPO"
+gh release create "v$version" ".\release\Netherite Portable $version.exe" --repo $repo --title "Netherite v$version" --generate-notes
+```
+
 ## 🧠 PreChaos AI Backend (Optional)
 
 The PreChaos backend provides AI-powered fatigue detection and behavior analysis.

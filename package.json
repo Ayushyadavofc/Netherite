@@ -7,6 +7,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:win:portable": "npm run build && electron-builder --win portable",
     "pack:win": "npm run build && electron-builder --win --dir",
     "start": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
@@ -124,6 +125,10 @@
     ],
     "extraResources": [
       {
+        "from": "app-icon.png",
+        "to": "app-icon.png"
+      },
+      {
         "from": "prechaos/backend",
         "to": "prechaos/backend",
         "filter": [
@@ -143,8 +148,18 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ]
+    },
+    "portable": {
+      "artifactName": "${productName} Portable ${version}.${ext}",
+      "requestExecutionLevel": "user"
     },
     "nsis": {
       "oneClick": false,
