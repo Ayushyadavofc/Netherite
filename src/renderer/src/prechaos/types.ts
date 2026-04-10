@@ -135,6 +135,7 @@ export type PreChaosContext = {
   progress_events: number
   reading_mode: boolean
   webcam_opt_in: boolean
+  last_activity_timestamp: number
 }
 
 export type PreChaosEvent = {

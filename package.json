@@ -140,6 +140,9 @@
       }
     ],
     "asar": true,
+    "asarUnpack": [
+      "prechaos/backend/**/*"
+    ],
     "win": {
       "icon": "app-icon.ico",
       "target": [

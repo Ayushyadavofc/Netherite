@@ -117,7 +117,7 @@ export default function AnalyticsPage() {
     return {
       typingSpeed: keyEvents.length / 12,
       pauseTime: pauses.length > 0 ? pauses.reduce((sum, value) => sum + value, 0) / pauses.length : 0,
-      idleTime: Math.max(0, Date.now() - (behaviorWindow[behaviorWindow.length - 1]?.timestamp ?? now)) / 1000,
+      idleTime: Math.max(0, Date.now() - (appContext.last_activity_timestamp || now)) / 1000,
       sessionMinutes: Math.max(0, appContext.route_dwell_seconds / 60),
       mouseDistance,
       routeChanges: routeEvents.length

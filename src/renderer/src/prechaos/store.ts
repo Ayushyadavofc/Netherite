@@ -243,7 +243,8 @@ const defaultContext: PreChaosContext = {
   habit_check_ins: 0,
   progress_events: 0,
   reading_mode: false,
-  webcam_opt_in: false
+  webcam_opt_in: false,
+  last_activity_timestamp: Date.now()
 }
 
 const defaultWebcamMetrics: WebcamMetrics = {

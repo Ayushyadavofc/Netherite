@@ -119,6 +119,8 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
   const mouseFlushTimerRef = useRef<number | null>(null)
   const lastScrollEventRef = useRef(0)
   const lastWebcamSignalRef = useRef(0)
+  const keystrokeTimestampsRef = useRef<number[]>([])
+  const backspaceCountRef = useRef(0)
 
   useEffect(() => {
     fatigueScoreRef.current = fatigueScore
@@ -253,6 +255,11 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
         type: 'key_down',
         key_class: getKeyClass(event)
       }, now)
+
+      keystrokeTimestampsRef.current = pruneRecent([...keystrokeTimestampsRef.current, now])
+      if (event.key === 'Backspace') {
+        backspaceCountRef.current += 1
+      }
 
       if (now - lastTypingEventLoggedRef.current > 3_000) {
         lastTypingEventLoggedRef.current = now
@@ -528,6 +535,28 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
         }, now)
       }
 
+      const recentKeystrokes = keystrokeTimestampsRef.current.filter(
+        (ts) => now - ts <= 12_000
+      )
+      keystrokeTimestampsRef.current = recentKeystrokes
+      const typingSpeed = recentKeystrokes.length / 12
+      let pauseTime = 0
+      let typingVariation = 0
+      if (recentKeystrokes.length >= 2) {
+        const sorted = [...recentKeystrokes].sort((a, b) => a - b)
+        const intervals: number[] = []
+        for (let i = 1; i < sorted.length; i++) {
+          intervals.push((sorted[i] - sorted[i - 1]) / 1000)
+        }
+        pauseTime = intervals.reduce((sum, v) => sum + v, 0) / intervals.length
+        const mean = pauseTime
+        const variance =
+          intervals.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / intervals.length
+        typingVariation = Math.sqrt(variance)
+      }
+      const backspaceCount = backspaceCountRef.current
+      backspaceCountRef.current = 0
+
       setAppContext({
         route: currentRoute,
         page_name: pageName,
@@ -550,10 +579,10 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
         note_activity: noteActivity,
         note_switches: noteSwitches,
         note_saves: noteSaves,
-        typing_speed: 0,
-        pause_time: 0,
-        typing_variation: 0,
-        backspace_count: 0,
+        typing_speed: typingSpeed,
+        pause_time: pauseTime,
+        typing_variation: typingVariation,
+        backspace_count: backspaceCount,
         flashcard_activity: flashcardActivity,
         flashcard_answer_latency: Number(flashcardAnswerLatency.toFixed(4)),
         flashcard_successes: flashcardSuccesses,
@@ -563,7 +592,8 @@ export function useBehaviorCollector(options: CollectorOptions = {}): StudyConte
         habit_check_ins: habitCheckIns,
         progress_events: progressEvents,
         reading_mode: !focusedEditable && secondsSinceLastActivity < 12,
-        webcam_opt_in: webcamOptInRef.current
+        webcam_opt_in: webcamOptInRef.current,
+        last_activity_timestamp: lastActivityRef.current
       })
 
       routeSwitchCountRef.current = 0
