@@ -101,6 +101,13 @@ type PreChaosState = {
   logs: string[]
 }
 
+type PreChaosLaunchCandidate = {
+  command: string
+  args: string[]
+  cwd: string
+  label: string
+}
+
 type CameraModuleMode = 'stopwatch' | 'stats' | 'expanded'
 
 type CameraModuleSnapshot = {
@@ -297,7 +304,43 @@ const getPreChaosBackendRoot = () =>
     ? join(process.resourcesPath, 'prechaos', 'backend')
     : join(app.getAppPath(), 'prechaos', 'backend')
 
-const getPreChaosApiKeyPath = () => join(getPreChaosBackendRoot(), 'data', 'api_key.txt')
+const getPreChaosStateRoot = () => (app.isPackaged ? join(app.getPath('userData'), 'prechaos') : getPreChaosBackendRoot())
+
+const getPreChaosApiKeyPath = () => join(getPreChaosStateRoot(), 'data', 'api_key.txt')
+
+const ensurePreChaosStateRoot = () => {
+  const stateRoot = getPreChaosStateRoot()
+  fs.mkdirSync(stateRoot, { recursive: true })
+
+  if (!app.isPackaged) {
+    return stateRoot
+  }
+
+  const backendRoot = getPreChaosBackendRoot()
+  for (const directoryName of ['data', 'models']) {
+    const sourceDir = join(backendRoot, directoryName)
+    const targetDir = join(stateRoot, directoryName)
+    fs.mkdirSync(targetDir, { recursive: true })
+
+    if (!fs.existsSync(sourceDir)) {
+      continue
+    }
+
+    for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+      if (!entry.isFile()) {
+        continue
+      }
+
+      const sourcePath = join(sourceDir, entry.name)
+      const targetPath = join(targetDir, entry.name)
+      if (!fs.existsSync(targetPath)) {
+        fs.copyFileSync(sourcePath, targetPath)
+      }
+    }
+  }
+
+  return stateRoot
+}
 
 const getPreChaosApiKey = () => {
   try {
@@ -316,6 +359,51 @@ const getPythonCandidates = () => {
     (value): value is string => Boolean(value)
   )
   return [...fromEnv, 'python', 'py']
+}
+
+const getPreChaosBundledExecutablePath = () => {
+  const executableName = process.platform === 'win32' ? 'prechaos-backend.exe' : 'prechaos-backend'
+  const candidate = join(getPreChaosBackendRoot(), 'bin', 'prechaos-backend', executableName)
+  return fs.existsSync(candidate) ? candidate : null
+}
+
+const getPreChaosRuntimeEnv = (backendRoot: string) => ({
+  PRECHAOS_RUNTIME_ROOT: backendRoot,
+  PRECHAOS_STATE_ROOT: ensurePreChaosStateRoot(),
+  PRECHAOS_HOST,
+  PRECHAOS_PORT: String(PRECHAOS_PORT),
+  PYTHONUNBUFFERED: '1'
+})
+
+const getPreChaosLaunchCandidates = (backendRoot: string): PreChaosLaunchCandidate[] => {
+  const bundledExecutable = getPreChaosBundledExecutablePath()
+  const candidates: PreChaosLaunchCandidate[] = []
+
+  if (bundledExecutable) {
+    candidates.push({
+      command: bundledExecutable,
+      args: [],
+      cwd: path.dirname(bundledExecutable),
+      label: bundledExecutable
+    })
+  }
+
+  const mainFile = join(backendRoot, 'main.py')
+  if (!app.isPackaged || fs.existsSync(mainFile)) {
+    for (const candidate of getPythonCandidates()) {
+      candidates.push({
+        command: candidate,
+        args:
+          candidate === 'py'
+            ? ['-3', '-m', 'uvicorn', 'main:app', '--app-dir', backendRoot, '--host', PRECHAOS_HOST, '--port', String(PRECHAOS_PORT)]
+            : ['-m', 'uvicorn', 'main:app', '--app-dir', backendRoot, '--host', PRECHAOS_HOST, '--port', String(PRECHAOS_PORT)],
+        cwd: backendRoot,
+        label: candidate
+      })
+    }
+  }
+
+  return candidates
 }
 
 const isSidecarHealthy = async () => {
@@ -377,30 +465,26 @@ async function ensurePreChaosSidecar() {
   }
 
   const backendRoot = getPreChaosBackendRoot()
-  const mainFile = join(backendRoot, 'main.py')
+  const launchCandidates = getPreChaosLaunchCandidates(backendRoot)
 
-  if (!fs.existsSync(mainFile)) {
+  if (launchCandidates.length === 0) {
     preChaosState.online = false
-    preChaosState.reason = `Missing sidecar entrypoint at ${mainFile}`
+    preChaosState.reason = `Missing PreChaos runtime in ${backendRoot}`
     appendPreChaosLog(preChaosState.reason)
     return { ok: false, online: false, endpoint: PRECHAOS_BASE_URL }
   }
 
-  for (const candidate of getPythonCandidates()) {
+  for (const candidate of launchCandidates) {
     try {
-      const args =
-        candidate === 'py'
-          ? ['-3', '-m', 'uvicorn', 'main:app', '--app-dir', backendRoot, '--host', PRECHAOS_HOST, '--port', String(PRECHAOS_PORT)]
-          : ['-m', 'uvicorn', 'main:app', '--app-dir', backendRoot, '--host', PRECHAOS_HOST, '--port', String(PRECHAOS_PORT)]
-      const child = spawn(candidate, args, {
-        cwd: backendRoot,
-        env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      const child = spawn(candidate.command, candidate.args, {
+        cwd: candidate.cwd,
+        env: { ...process.env, ...getPreChaosRuntimeEnv(backendRoot) },
         stdio: 'pipe'
       })
       preChaosState.process = child
-      preChaosState.pythonPath = candidate
-      appendPreChaosLog(`Starting PreChaos with ${candidate}`)
-      logEvent(`[prechaos] starting sidecar with ${candidate}`)
+      preChaosState.pythonPath = candidate.label
+      appendPreChaosLog(`Starting PreChaos with ${candidate.label}`)
+      logEvent(`[prechaos] starting sidecar with ${candidate.label}`)
 
       child.stdout.on('data', (chunk) => appendPreChaosLog(String(chunk).trim()))
       child.stderr.on('data', (chunk) => appendPreChaosLog(String(chunk).trim()))
@@ -430,12 +514,13 @@ async function ensurePreChaosSidecar() {
 
       child.kill()
     } catch (error) {
-      appendPreChaosLog(`Failed to launch with ${candidate}: ${error instanceof Error ? error.message : String(error)}`)
+      appendPreChaosLog(`Failed to launch with ${candidate.label}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
   preChaosState.online = false
-  preChaosState.reason = 'Unable to launch PreChaos. Install Python and backend requirements to enable AI features.'
+  preChaosState.reason =
+    'Unable to launch PreChaos. Rebuild the app so it includes the bundled backend, or install Python and backend requirements for development.'
   return { ok: false, online: false, endpoint: PRECHAOS_BASE_URL }
 }
 
@@ -925,6 +1010,7 @@ const getSharedRootSegment = (entries: unzipper.Entry[]) => {
 }
 
 const CONCURRENCY_LIMIT = 16
+const ZIP_READ_CONCURRENCY = 1
 
 async function runConcurrent<T>(items: T[], fn: (item: T) => Promise<void>, limit = CONCURRENCY_LIMIT) {
   let index = 0
@@ -1025,7 +1111,7 @@ async function extractZipToDirectory(
 
       readStream.pipe(writeStream)
     })
-  })
+  }, ZIP_READ_CONCURRENCY)
 
   emitByteProgress(options?.reportProgress, {
     stage: 'extracting',
@@ -1183,7 +1269,7 @@ async function mergeVaultFromZip(
       currentBytes: processedBytes,
       totalBytes
     })
-  })
+  }, ZIP_READ_CONCURRENCY)
 
   emitByteProgress(reportProgress, {
     stage: 'applying',

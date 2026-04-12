@@ -95,14 +95,16 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-Edit `.env` with your Appwrite values:
+Edit `.env` with your public Appwrite runtime values:
 
 ```env
-VITE_APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
-VITE_APPWRITE_PROJECT_ID=your_project_id
-VITE_APPWRITE_DATABASE_ID=your_database_id
-# ... other Appwrite variables
+VITE_APPWRITE_ENDPOINT=https://<REGION>.cloud.appwrite.io/v1
+VITE_APPWRITE_PROJECT_ID=your_public_project_id
+VITE_APPWRITE_DATABASE_ID=your_public_database_id
+# ... the rest of the VITE_APPWRITE_* values from .env.example
 ```
+
+Do not put `APPWRITE_API_KEY` or any other admin secret in the desktop app `.env` file. The packaged EXE only needs public runtime identifiers.
 
 ### 4. Run in Development
 
@@ -125,6 +127,8 @@ npm run dist:win
 ```
 
 The installer will be generated in the `release/` folder.
+Windows builds also bundle the PreChaos backend as a standalone executable, so installed copies do not need Python on the destination PC.
+The Windows packaging scripts also validate that your public Appwrite runtime config is present before building the EXE.
 
 ### 7. Create a Portable Windows EXE
 
@@ -147,6 +151,7 @@ gh release create "v$version" ".\release\Netherite Portable $version.exe" --repo
 ## 🧠 PreChaos AI Backend (Optional)
 
 The PreChaos backend provides AI-powered fatigue detection and behavior analysis.
+Packaged Windows builds already include this backend. The setup below is only needed when you want to run or debug the backend from source.
 
 ### Setup
 
@@ -237,13 +242,13 @@ To enable cloud sync and the gacha store features, create the following in your 
 
 | Collection ID | Purpose | Key Attributes |
 |---------------|---------|----------------|
-| `user_settings` | User profile data | `userId` (document ID), `gender`, `dob`, `avatar_id` |
-| `vault_snapshots` | Vault sync metadata | `vaultId`, `userId`, `snapshotName`, `uploadedAt` |
-| `sync_manifests` | Sync state tracking | `vaultId`, `userId`, `lastSyncedAt` |
-| `gacha_users` | Store user data | `userId` (document ID), `scraps`, `lifetimeScraps`, `level` |
-| `gacha_inventory` | Owned items | `userId`, `itemId`, `quantity`, `acquiredAt` |
-| `gacha_cosmetics` | Item catalog | `itemId` (document ID), `name`, `rarity`, `price`, `type` |
-| `gacha_chests` | Chest catalog | `chestId` (document ID), `name`, `cost`, `contents` |
+| `user_settings` | User profile data | `userId`, `gender`, `dob`, `avatar_id` |
+| `vault_snapshots` | Vault sync metadata | `vaultId`, `uploadedAt`, `uploadedBy`, `checkedBy`, `snapshotUrl`, `snapshotName` |
+| `sync_manifests` | Sync state tracking | `userId`, `deviceIds`, `updatedAt` |
+| `gacha_users` | Store user data | `userId`, `scraps`, `gems`, `createdAt`, `currentStreak`, `lastActiveDate`, `nextChestAt`, `bonusChests` |
+| `gacha_inventory` | Owned items | `userId`, `items`, `unlocked` |
+| `gacha_cosmetics` | Item catalog | `id`, `name`, `rarity`, `totalPieces` |
+| `gacha_chests` | Chest catalog | `id`, `name`, `cost`, `rarityWeights`, `piecesPerOpen` |
 
 ### Storage Buckets
 
@@ -254,6 +259,12 @@ To enable cloud sync and the gacha store features, create the following in your 
 
 - `open_chest` — Gacha chest opening logic
 - `sync_gacha_profile` — Inventory sync
+
+### Schema Notes
+
+- `sync_manifests` documents use the signed-in user's Appwrite user ID as the document ID.
+- `gacha_inventory` stores one document per user, with serialized `items` data and a string-array `unlocked` field.
+- `vault_snapshots` metadata must support `Query.equal('vaultId', ...)` and `Query.orderDesc('uploadedAt')`, so those attributes need to exist and be queryable.
 
 ## 🤝 Contributing
 

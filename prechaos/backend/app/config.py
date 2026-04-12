@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
+
+def _resolve_backend_root() -> Path:
+    configured_root = os.environ.get("PRECHAOS_RUNTIME_ROOT", "").strip()
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    return Path(__file__).resolve().parent.parent
+
+
+def _resolve_state_root() -> Path:
+    configured_root = os.environ.get("PRECHAOS_STATE_ROOT", "").strip()
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+
+    return BACKEND_ROOT
+
+
+BACKEND_ROOT = _resolve_backend_root()
+STATE_ROOT = _resolve_state_root()
 APP_ROOT = Path(__file__).resolve().parent
-BACKEND_ROOT = APP_ROOT.parent
-DATA_ROOT = BACKEND_ROOT / "data"
-MODEL_ROOT = BACKEND_ROOT / "models"
+DATA_ROOT = STATE_ROOT / "data"
+MODEL_ROOT = STATE_ROOT / "models"
 FEEDBACK_PATH = DATA_ROOT / "feedback.json"
 BASELINE_PATH = DATA_ROOT / "baseline.json"
 LIVE_DATA_PATH = DATA_ROOT / "live_samples.jsonl"

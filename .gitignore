@@ -92,6 +92,7 @@ __pycache__/
 *$py.class
 *.so
 .venv/
+prechaos/backend/.venv-build/
 venv/
 ENV/
 env/
@@ -101,6 +102,7 @@ env/
 # Project Data
 prechaos/backend/data/
 prechaos/backend/models/
+prechaos/runtime/
 
 # Electron packaging
 *.exe

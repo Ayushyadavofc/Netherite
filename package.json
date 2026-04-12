@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:win:portable": "npm run build && electron-builder --win portable",
-    "pack:win": "npm run build && electron-builder --win --dir",
+    "appwrite:check-public-config": "node .\\scripts\\validate-public-appwrite-config.mjs",
+    "dist:win": "npm run appwrite:check-public-config && npm run build && npm run prechaos:bundle:win && electron-builder --win nsis",
+    "dist:win:portable": "npm run appwrite:check-public-config && npm run build && npm run prechaos:bundle:win && electron-builder --win portable",
+    "pack:win": "npm run appwrite:check-public-config && npm run build && npm run prechaos:bundle:win && electron-builder --win --dir",
     "start": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
     "prechaos:api": "python -m uvicorn main:app --app-dir prechaos/backend --host 127.0.0.1 --port 8765",
     "prechaos:requirements": "python -m pip install -r prechaos/backend/requirements.txt",
-    "prechaos:train": "python -c \"from prechaos.backend.app.training import train_from_dataset; import sys; print(train_from_dataset(sys.argv[1]).metrics)\""
+    "prechaos:train": "python -c \"from prechaos.backend.app.training import train_from_dataset; import sys; print(train_from_dataset(sys.argv[1]).metrics)\"",
+    "prechaos:bundle:win": "powershell -ExecutionPolicy Bypass -File .\\scripts\\build-prechaos-backend.ps1"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
@@ -129,13 +131,10 @@
         "to": "app-icon.png"
       },
       {
-        "from": "prechaos/backend",
-        "to": "prechaos/backend",
+        "from": "prechaos/runtime",
+        "to": "prechaos",
         "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc",
-          "!data/live_*.jsonl"
+          "**/*"
         ]
       }
     ],
