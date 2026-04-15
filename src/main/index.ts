@@ -92,6 +92,38 @@ const resolveAppIconPath = (): string => {
   return cachedAppIconPath
 }
 
+let cachedCharacterAssetRoot: string | null = null
+
+const resolveCharacterAssetRoot = (): string => {
+  if (cachedCharacterAssetRoot) {
+    return cachedCharacterAssetRoot
+  }
+
+  const requiredFolders = [
+    'male swordsman',
+    'male magician',
+    'archer male',
+    'female swordsman',
+    'female magician',
+    'female archer'
+  ]
+
+  const candidates = [
+    process.cwd(),
+    app.getAppPath(),
+    join(app.getAppPath(), '..'),
+    join(app.getAppPath(), '..', '..'),
+    process.resourcesPath
+  ]
+
+  cachedCharacterAssetRoot =
+    candidates.find((candidate) =>
+      requiredFolders.every((folderName) => fs.existsSync(join(candidate, folderName)))
+    ) ?? process.cwd()
+
+  return cachedCharacterAssetRoot
+}
+
 type PreChaosState = {
   process: ChildProcessWithoutNullStreams | null
   online: boolean
@@ -699,6 +731,35 @@ const normalizeForCompare = (filePath: string) => {
 const isPathInside = (rootPath: string, candidatePath: string) => {
   const relative = path.relative(rootPath, candidatePath)
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+const resolveAllowedLocalFilePath = async (targetPath: string) => {
+  try {
+    return await resolvePathWithinVault(targetPath)
+  } catch {
+    const resolvedTargetPath = normalizeFsPath(targetPath)
+    const characterRoot = resolveCharacterAssetRoot()
+    const allowedCharacterFolders = [
+      'male swordsman',
+      'male magician',
+      'archer male',
+      'female swordsman',
+      'female magician',
+      'female archer'
+    ].map((folderName) => normalizeFsPath(path.join(characterRoot, folderName)))
+
+    const matchedRoot = allowedCharacterFolders.find((folderPath) => isPathInside(folderPath, resolvedTargetPath))
+    if (!matchedRoot) {
+      throw new Error('Forbidden')
+    }
+
+    const stats = await fs.promises.stat(resolvedTargetPath)
+    if (!stats.isFile()) {
+      throw new Error('Not a file')
+    }
+
+    return resolvedTargetPath
+  }
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -1942,6 +2003,10 @@ ipcMain.on('app:getLaunchIdSync', (event) => {
   event.returnValue = APP_LAUNCH_ID
 })
 
+ipcMain.on('app:getCharacterAssetRootSync', (event) => {
+  event.returnValue = resolveCharacterAssetRoot()
+})
+
 ipcMain.handle('app:log', async (_event, message: string) => {
   appendRuntimeLog(message)
   return { ok: true }
@@ -2811,7 +2876,7 @@ app.whenReady().then(async () => {
   protocol.handle('local-file', async (request) => {
     let filePath: string
     try {
-      filePath = await resolvePathWithinVault(resolveLocalFilePath(request.url))
+      filePath = await resolveAllowedLocalFilePath(resolveLocalFilePath(request.url))
     } catch {
       return new Response('Forbidden', { status: 403 })
     }

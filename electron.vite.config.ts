@@ -33,6 +33,9 @@ export default defineConfig({
       postcss: {
         plugins: [tailwindcss()]
       }
+    },
+    build: {
+      copyPublicDir: true
     }
   }
 })

@@ -4,9 +4,13 @@ import { Camera, LoaderCircle, LogIn, Trash2, UserPlus, UserRound, X } from 'luc
 import { toast } from 'sonner'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Slider } from '@/components/ui/slider'
+import { CharacterViewer } from '@/components/gacha/CharacterViewer'
 import { defaultProfile, useProfile } from '@/hooks/use-data'
+import { CharacterSelectionModal } from '@/components/gacha/CharacterSelectionModal'
+import { getDefaultCharacterId, resolveCharacterId } from '@/lib/characters'
+import { useGachaStore } from '@/stores/gachaStore'
 import {
   AVATARS_BUCKET_ID,
   DATABASE_ID,
@@ -140,11 +144,17 @@ export default function ProfileButton() {
   const login = useAuthStore((state) => state.login)
   const logout = useAuthStore((state) => state.logout)
   const register = useAuthStore((state) => state.register)
+  const changeSelectedCharacter = useGachaStore((state) => state.changeSelectedCharacter)
+  const syncGachaProfile = useGachaStore((state) => state.syncProfile)
+  const gachaWallet = useGachaStore((state) => state.wallet)
+  const gachaStreak = useGachaStore((state) => state.streak)
+  const selectedCharacter = useGachaStore((state) => state.selectedCharacter)
   const [storedProfile, setStoredProfile] = useProfile()
-
   const [isOpen, setIsOpen] = useState(false)
+  const [showCharacterModal, setShowCharacterModal] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('register')
   const [authForm, setAuthForm] = useState(defaultAuthForm)
+  const [pendingCharacterId, setPendingCharacterId] = useState<string>(getDefaultCharacterId('male'))
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingProfile, setIsLoadingProfile] = useState(false)
@@ -179,7 +189,10 @@ export default function ProfileButton() {
   }, [avatarId, currentUser])
 
   const displayName = currentUser?.name?.trim() || 'Adventurer'
-  const displayGender = normalizeGender(settingsDocument?.gender)
+  const displayGender = normalizeGender(settingsDocument?.gender ?? storedProfile.gender)
+  const activeCharacterId = resolveCharacterId(selectedCharacter, displayGender)
+  const shouldWarnOnCharacterChange =
+    (gachaWallet?.scraps ?? 0) > 0 || (gachaWallet?.gems ?? 0) > 0 || (gachaStreak?.currentStreak ?? 0) > 0
   const cropDisplayMetrics = useMemo(() => {
     if (!cropImageMetrics) {
       return null
@@ -379,15 +392,30 @@ export default function ProfileButton() {
       return
     }
 
-    const nextUrl = URL.createObjectURL(nextFile)
+    const reader = new FileReader()
 
-    setPendingAvatarFile(nextFile)
-    setCropSourceUrl(nextUrl)
-    setCropImageMetrics(null)
-    setCropZoom(1)
-    setCropPosition({ x: 0, y: 0 })
-    setDragOrigin(null)
-    setError(null)
+    reader.onload = () => {
+      const nextUrl = typeof reader.result === 'string' ? reader.result : null
+
+      if (!nextUrl) {
+        setError('Could not load that image.')
+        return
+      }
+
+      setPendingAvatarFile(nextFile)
+      setCropSourceUrl(nextUrl)
+      setCropImageMetrics(null)
+      setCropZoom(1)
+      setCropPosition({ x: 0, y: 0 })
+      setDragOrigin(null)
+      setError(null)
+    }
+
+    reader.onerror = () => {
+      setError('Could not load that image.')
+    }
+
+    reader.readAsDataURL(nextFile)
   }
 
   const handleUploadAvatar = async () => {
@@ -471,17 +499,20 @@ export default function ProfileButton() {
     }
   }
 
-  const handleRegister = async () => {
+  const handleRegisterWithCharacter = async (characterId: string) => {
     setIsSubmitting(true)
     setError(null)
 
     try {
+      const resolvedCharacterId = resolveCharacterId(characterId, authForm.gender)
+      setPendingCharacterId(resolvedCharacterId)
       await register(
         authForm.email.trim(),
         authForm.password,
         authForm.name.trim(),
         authForm.gender,
-        authForm.dob
+        authForm.dob,
+        resolvedCharacterId
       )
 
       const nextUser = useAuthStore.getState().user
@@ -489,6 +520,7 @@ export default function ProfileButton() {
         settingsRequestRef.current += 1
         await loadSettingsDocument(nextUser, settingsRequestRef.current)
         await syncCurrentDeviceRegistration(nextUser.$id).catch(() => undefined)
+        await syncGachaProfile().catch(() => undefined)
       }
 
       setAuthForm((current) => ({
@@ -501,6 +533,12 @@ export default function ProfileButton() {
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const handleRegister = () => {
+    setError(null)
+    setPendingCharacterId((current) => resolveCharacterId(current, authForm.gender))
+    setShowCharacterModal(true)
   }
 
   const handleLogin = async () => {
@@ -600,6 +638,15 @@ export default function ProfileButton() {
     })
 
     setCropPosition(nextPosition)
+  }
+
+  const handleChangeCharacter = async (characterId: string) => {
+    try {
+      await changeSelectedCharacter(characterId)
+      toast.success('Character updated.')
+    } catch (e) {
+      toast.error('Failed to update character.')
+    }
   }
 
   useEffect(() => {
@@ -702,6 +749,11 @@ export default function ProfileButton() {
                 <DialogTitle className="text-[1.28rem] font-extrabold tracking-tight text-white">
                   {isAuthenticated ? 'Your Profile' : 'Profile Access'}
                 </DialogTitle>
+                <DialogDescription className="sr-only">
+                  {isAuthenticated
+                    ? 'Manage your profile, avatar, and current character.'
+                    : 'Sign in or register to manage your profile and character.'}
+                </DialogDescription>
                 <button
                   type="button"
                   onClick={closeModal}
@@ -744,21 +796,40 @@ export default function ProfileButton() {
                     <h3 className="mt-5 text-[1.45rem] font-extrabold leading-none text-white">
                       {displayName} <span className="text-[#ff5625]">{displayGender === 'female' ? 'F' : 'M'}</span>
                     </h3>
-                    {avatarId ? (
-                      <button
-                        type="button"
-                        onClick={handleRemoveAvatar}
-                        disabled={isAvatarBusy}
-                        className="mt-4 inline-flex items-center gap-2 rounded-full border border-[#47241a] bg-[#1a100d] px-4 py-2 text-sm font-semibold text-[#ffb395] transition-colors hover:border-[#ff5625]/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Remove avatar
-                      </button>
-                    ) : (
-                      <p className="mt-3 text-[0.64rem] uppercase tracking-[0.22em] text-[#8f6f62]">
-                        Add a photo to personalize your profile
-                      </p>
-                    )}
+                    <div className="mt-5 w-full rounded-[24px] border border-[var(--nv-border)] bg-[#111111] px-4 py-5">
+                      <div className="flex justify-center">
+                        <CharacterViewer
+                          characterId={activeCharacterId}
+                          size="large"
+                          showControls
+                          showLabel
+                        />
+                      </div>
+                      <div className="mt-4 flex flex-col items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowCharacterModal(true)}
+                          className="inline-flex items-center gap-2 rounded-full border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-[var(--nv-primary)]"
+                        >
+                          Change Character
+                        </button>
+                        {avatarId ? (
+                          <button
+                            type="button"
+                            onClick={handleRemoveAvatar}
+                            disabled={isAvatarBusy}
+                            className="inline-flex items-center gap-2 rounded-full border border-[#47241a] bg-[#1a100d] px-4 py-2 text-sm font-semibold text-[#ffb395] transition-colors hover:border-[#ff5625]/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Remove avatar
+                          </button>
+                        ) : (
+                          <p className="text-[0.64rem] uppercase tracking-[0.22em] text-[#8f6f62]">
+                            Personalize your profile
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -869,7 +940,10 @@ export default function ProfileButton() {
                               <button
                                 key={gender}
                                 type="button"
-                                onClick={() => setAuthForm((current) => ({ ...current, gender }))}
+                                onClick={() => {
+                                  setAuthForm((current) => ({ ...current, gender }))
+                                  setPendingCharacterId((current) => resolveCharacterId(current, gender))
+                                }}
                                 disabled={!isCloudAuthAvailable}
                                 className={cn(
                                   'flex h-11 items-center justify-center gap-3 rounded-xl border text-lg font-semibold transition-colors',
@@ -1109,6 +1183,17 @@ export default function ProfileButton() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <CharacterSelectionModal
+        isOpen={showCharacterModal}
+        onClose={() => setShowCharacterModal(false)}
+        onSelect={isAuthenticated ? handleChangeCharacter : handleRegisterWithCharacter}
+        gender={isAuthenticated ? normalizeGender(settingsDocument?.gender ?? storedProfile.gender) : authForm.gender}
+        currentCharacterId={isAuthenticated ? activeCharacterId : pendingCharacterId}
+        showWarning={isAuthenticated ? shouldWarnOnCharacterChange : false}
+        confirmLabel={isAuthenticated ? 'Apply Character' : 'Create Account'}
+        isLoading={isSubmitting}
+      />
     </>
   )
 }

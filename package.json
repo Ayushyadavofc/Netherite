@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Your second brain. Built different.",
   "main": "./out/main/index.js",
-  "scripts": {
+"scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node -e \"const fs=require('fs');const path=require('path');fs.readdirSync('public').filter(f=>fs.statSync(path.join('public',f)).isFile()).forEach(f=>fs.copyFileSync(path.join('public',f),path.join('out/renderer',f)))\"",
     "appwrite:check-public-config": "node .\\scripts\\validate-public-appwrite-config.mjs",
     "dist:win": "npm run appwrite:check-public-config && npm run build && npm run prechaos:bundle:win && electron-builder --win nsis",
     "dist:win:portable": "npm run appwrite:check-public-config && npm run build && npm run prechaos:bundle:win && electron-builder --win portable",

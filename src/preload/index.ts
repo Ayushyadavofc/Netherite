@@ -18,9 +18,18 @@ const appLaunchId = (() => {
   }
 })()
 
+const characterAssetRoot = (() => {
+  try {
+    return ipcRenderer.sendSync('app:getCharacterAssetRootSync') as string
+  } catch {
+    return ''
+  }
+})()
+
 contextBridge.exposeInMainWorld('electronAPI', {
   runtimeConfig,
   appLaunchId,
+  characterAssetRoot,
   appLog: (message: string) => ipcRenderer.invoke('app:log', message),
   // Account data: lets the signed-in renderer load and persist per-user JSON files.
   readAccountFile: <T = unknown>(userId: string, filename: string) =>

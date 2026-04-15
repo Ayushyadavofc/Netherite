@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clock,
   Edit2,
+  Plus,
   SkipForward,
   Star,
   Trash2,
@@ -858,6 +859,16 @@ export default function TodosPage() {
           </div>
         </div>
       </main>
+
+      {!isAdding && (
+        <button
+          onClick={() => setIsAdding(true)}
+          className="fixed bottom-8 right-8 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--nv-primary)] text-white shadow-[0_4px_24px_rgba(255,86,37,0.4)] transition-all hover:scale-110 hover:shadow-[0_6px_32px_rgba(255,86,37,0.55)] active:scale-95"
+          aria-label="Add new task"
+        >
+          <Plus className="h-7 w-7" />
+        </button>
+      )}
     </div>
   )
 }

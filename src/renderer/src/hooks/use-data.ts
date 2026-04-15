@@ -285,6 +285,7 @@ export interface Profile {
   dob: string
   email: string
   avatarId: string
+  selectedCharacter?: string | null
   geminiApiKey?: string
 }
 export const defaultProfile: Profile = {
@@ -293,6 +294,7 @@ export const defaultProfile: Profile = {
   dob: '',
   email: '',
   avatarId: '',
+  selectedCharacter: null,
   geminiApiKey: ''
 }
 export const useProfile = () =>

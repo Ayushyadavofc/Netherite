@@ -43,8 +43,22 @@ export default async ({ req, res, log, error }: AppwriteRuntimeContext) => {
       env.cosmeticsCollectionId,
       [Query.limit(500)]
     )) as unknown as { documents: GachaCosmeticDocument[] }
+    const rewardCosmetics = (cosmeticsResult.documents ?? []).filter(
+      (
+        cosmetic
+      ): cosmetic is GachaCosmeticDocument & {
+        rarity: 'common' | 'rare' | 'epic'
+        totalPieces: number
+      } => {
+        if (cosmetic.category === 'character' || cosmetic.rarity === 'default') {
+          return false
+        }
 
-    if ((cosmeticsResult.documents ?? []).length === 0) {
+        return typeof cosmetic.totalPieces === 'number'
+      }
+    )
+
+    if (rewardCosmetics.length === 0) {
       return json(res, 409, { error: 'No cosmetics are configured in the gacha catalog.' })
     }
 
@@ -72,7 +86,7 @@ export default async ({ req, res, log, error }: AppwriteRuntimeContext) => {
 
     for (let rollIndex = 0; rollIndex < chestDoc.piecesPerOpen; rollIndex += 1) {
       const rolledRarity = getRarityWeightWinner(chestWeights) as GachaCosmeticDocument['rarity']
-      const cosmetic = pickRandomCosmetic(rolledRarity, cosmeticsResult.documents, piecesByCosmetic, unlockedSet)
+      const cosmetic = pickRandomCosmetic(rolledRarity, rewardCosmetics, piecesByCosmetic, unlockedSet)
 
       if (!cosmetic) {
         break

@@ -1,7 +1,10 @@
 import { useState } from 'react'
 
 import { Spinner } from '@/components/ui/spinner'
+import { getDefaultCharacterId, resolveCharacterId } from '@/lib/characters'
 import { useAuthStore } from '@/stores/authStore'
+import { useGachaStore } from '@/stores/gachaStore'
+import { CharacterSelectionModal } from '@/components/gacha/CharacterSelectionModal'
 
 type AuthMode = 'login' | 'register'
 
@@ -19,18 +22,46 @@ export default function AuthPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [gender, setGender] = useState<'male' | 'female'>('male')
+  const [pendingCharacterId, setPendingCharacterId] = useState<string>(getDefaultCharacterId('male'))
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [showCharacterModal, setShowCharacterModal] = useState(false)
+
+  const handleRegisterWithCharacter = async (characterId: string) => {
+    if (isSubmitting) return
+
+    setError('')
+    setIsSubmitting(true)
+    setShowCharacterModal(false)
+
+    try {
+      const resolvedCharacterId = resolveCharacterId(characterId, gender)
+      setPendingCharacterId(resolvedCharacterId)
+      await register(email, password, name, gender, '', resolvedCharacterId)
+      await useGachaStore.getState().syncProfile()
+    } catch (submitError) {
+      setError(getErrorMessage(submitError, 'Could not create your account.'))
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   const handleSubmit = async () => {
     if (isSubmitting) return
 
     setError('')
+
+    if (mode === 'register') {
+      setShowCharacterModal(true)
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
       if (mode === 'register') {
-        await register(email, password, name)
+        // Handled by handleRegisterWithCharacter
       } else {
         await login(email, password)
       }
@@ -54,10 +85,19 @@ export default function AuthPage() {
   const canSubmit =
     email.trim().length > 0 &&
     password.trim().length > 0 &&
-    (mode === 'login' || name.trim().length > 0)
+    (mode === 'login' || (name.trim().length > 0 && gender))
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#050303] px-4 py-10">
+      <CharacterSelectionModal
+        isOpen={showCharacterModal}
+        onClose={() => setShowCharacterModal(false)}
+        onSelect={handleRegisterWithCharacter}
+        gender={gender}
+        currentCharacterId={pendingCharacterId}
+        confirmLabel="Create Account"
+        isLoading={isSubmitting}
+      />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,107,43,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(153,27,27,0.22),transparent_35%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:32px_32px] opacity-30" />
 
@@ -77,19 +117,56 @@ export default function AuthPage() {
         </div>
 
         <div className="space-y-5 px-6 py-6">
-          {mode === 'register' && (
-            <div>
-              <label className="mb-2 block text-[0.65rem] font-black uppercase tracking-[0.28em] text-[#7d5f56]">
-                Name
-              </label>
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Netherite Smith"
-                className="w-full border border-[#2a1a16] bg-[#120d0d] px-4 py-3 text-sm font-medium text-white outline-none transition-all placeholder:text-[#5f4a45] focus:border-[#ff5625] focus:shadow-[0_0_0_1px_rgba(255,86,37,0.3)]"
-              />
-            </div>
-          )}
+          {mode === 'register' ? (
+            <>
+              <div>
+                <label className="mb-2 block text-[0.65rem] font-black uppercase tracking-[0.28em] text-[#7d5f56]">
+                  Name
+                </label>
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Netherite Smith"
+                  className="w-full border border-[#2a1a16] bg-[#120d0d] px-4 py-3 text-sm font-medium text-white outline-none transition-all placeholder:text-[#5f4a45] focus:border-[#ff5625] focus:shadow-[0_0_0_1px_rgba(255,86,37,0.3)]"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-[0.65rem] font-black uppercase tracking-[0.28em] text-[#7d5f56]">
+                  Gender
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGender('male')
+                      setPendingCharacterId((current) => resolveCharacterId(current, 'male'))
+                    }}
+                    className={`flex-1 border px-4 py-3 text-sm font-medium transition-all ${
+                      gender === 'male'
+                        ? 'border-[#ff5625] bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
+                        : 'border-[#2a1a16] bg-[#120d0d] text-[#5f4a45] hover:border-[#ff5625]/50'
+                    }`}
+                  >
+                    Male
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGender('female')
+                      setPendingCharacterId((current) => resolveCharacterId(current, 'female'))
+                    }}
+                    className={`flex-1 border px-4 py-3 text-sm font-medium transition-all ${
+                      gender === 'female'
+                        ? 'border-[#ff5625] bg-[rgba(255,86,37,0.1)] text-[#ff5625]'
+                        : 'border-[#2a1a16] bg-[#120d0d] text-[#5f4a45] hover:border-[#ff5625]/50'
+                    }`}
+                  >
+                    Female
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           <div>
             <label className="mb-2 block text-[0.65rem] font-black uppercase tracking-[0.28em] text-[#7d5f56]">

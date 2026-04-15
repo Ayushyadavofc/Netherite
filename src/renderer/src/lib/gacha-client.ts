@@ -30,8 +30,11 @@ type ChestDocument = Models.Document & {
 type CosmeticDocument = Models.Document & {
   id: string
   name: string
-  rarity: 'common' | 'rare' | 'epic'
-  totalPieces: number
+  rarity: 'common' | 'rare' | 'epic' | 'default'
+  totalPieces?: number
+  category?: 'cosmetic' | 'character'
+  gender?: 'male' | 'female'
+  animations?: string[]
 }
 
 const GACHA_REQUIRED_KEYS = {
@@ -113,12 +116,20 @@ export const listGachaCosmetics = async (): Promise<GachaCosmetic[]> => {
     queries: [Query.limit(500)]
   })
 
-  return result.documents.map((document) => ({
-    id: document.id,
-    name: document.name,
-    rarity: document.rarity,
-    totalPieces: document.totalPieces
-  }))
+  return result.documents
+    .filter((document) => {
+      if (document.category === 'character' || document.rarity === 'default') {
+        return false
+      }
+
+      return typeof document.totalPieces === 'number'
+    })
+    .map((document) => ({
+      id: document.id,
+      name: document.name,
+      rarity: document.rarity,
+      totalPieces: document.totalPieces as number
+    }))
 }
 
 const executeFunctionJson = async <T>(functionId: string, payload: Record<string, unknown>) => {

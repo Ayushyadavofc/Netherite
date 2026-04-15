@@ -11,7 +11,7 @@ const env = {
   chestsCollectionId: process.env.APPWRITE_GACHA_CHESTS_COLLECTION_ID ?? 'gacha_chests'
 }
 
-const COSMETIC_TOTAL_PIECES = 6
+const LOOT_COSMETIC_TOTAL_PIECES = 6
 
 const defaultCosmetics = [
   { id: 'shadow_gi', name: 'Shadow Gi', rarity: 'rare' },
@@ -23,6 +23,63 @@ const defaultCosmetics = [
   { id: 'storm_runner', name: 'Storm Runner', rarity: 'rare' },
   { id: 'void_mask', name: 'Void Mask', rarity: 'epic' },
   { id: 'signal_jacket', name: 'Signal Jacket', rarity: 'common' }
+] as const
+
+const defaultCharacterCosmetics = [
+  {
+    id: 'swordsman',
+    name: 'Swordsman',
+    gender: 'male',
+    animations: ['idle', 'walk', 'slash', 'backslash'],
+    rarity: 'default',
+    category: 'character',
+    totalPieces: 1
+  },
+  {
+    id: 'dark-mage',
+    name: 'Dark Mage',
+    gender: 'male',
+    animations: ['idle', 'walk', 'spell', 'thrust'],
+    rarity: 'default',
+    category: 'character',
+    totalPieces: 1
+  },
+  {
+    id: 'archer-m',
+    name: 'Archer',
+    gender: 'male',
+    animations: ['idle', 'walk', 'shoot'],
+    rarity: 'default',
+    category: 'character',
+    totalPieces: 1
+  },
+  {
+    id: 'swordswoman',
+    name: 'Swordswoman',
+    gender: 'female',
+    animations: ['idle', 'walk', 'slash', 'backslash'],
+    rarity: 'default',
+    category: 'character',
+    totalPieces: 1
+  },
+  {
+    id: 'dark-mage-f',
+    name: 'Dark Mage',
+    gender: 'female',
+    animations: ['idle', 'walk', 'spell', 'thrust'],
+    rarity: 'default',
+    category: 'character',
+    totalPieces: 1
+  },
+  {
+    id: 'archer-f',
+    name: 'Archer',
+    gender: 'female',
+    animations: ['idle', 'walk', 'shoot'],
+    rarity: 'default',
+    category: 'character',
+    totalPieces: 1
+  }
 ] as const
 
 const defaultChests = [
@@ -99,6 +156,36 @@ const createAttributeIfMissing = async (createAttribute: () => Promise<unknown>)
   }
 }
 
+const createOrUpdateStringAttribute = async (
+  createAttribute: () => Promise<unknown>,
+  updateAttribute: () => Promise<unknown>
+) => {
+  try {
+    await createAttribute()
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) {
+      throw error
+    }
+
+    await updateAttribute()
+  }
+}
+
+const createOrUpdateEnumAttribute = async (
+  createAttribute: () => Promise<unknown>,
+  updateAttribute: () => Promise<unknown>
+) => {
+  try {
+    await createAttribute()
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) {
+      throw error
+    }
+
+    await updateAttribute()
+  }
+}
+
 const upsertDocument = async (
   databases: Databases,
   collectionId: string,
@@ -132,6 +219,10 @@ async function main() {
     createAttributeIfMissing(() => databases.createIntegerAttribute(env.databaseId, env.usersCollectionId, 'scraps', true)),
     createAttributeIfMissing(() => databases.createIntegerAttribute(env.databaseId, env.usersCollectionId, 'gems', true)),
     createAttributeIfMissing(() => databases.createDatetimeAttribute(env.databaseId, env.usersCollectionId, 'createdAt', true)),
+    createOrUpdateStringAttribute(
+      () => databases.createStringAttribute(env.databaseId, env.usersCollectionId, 'selectedCharacter', 64, false, 'swordsman'),
+      () => databases.updateStringAttribute(env.databaseId, env.usersCollectionId, 'selectedCharacter', false, 'swordsman', 64)
+    ),
     createAttributeIfMissing(() => databases.createIntegerAttribute(env.databaseId, env.usersCollectionId, 'currentStreak', false, 0)),
     createAttributeIfMissing(() => databases.createStringAttribute(env.databaseId, env.usersCollectionId, 'lastActiveDate', 32, false)),
     createAttributeIfMissing(() => databases.createDatetimeAttribute(env.databaseId, env.usersCollectionId, 'nextChestAt', false)),
@@ -147,7 +238,48 @@ async function main() {
   await Promise.all([
     createAttributeIfMissing(() => databases.createStringAttribute(env.databaseId, env.cosmeticsCollectionId, 'id', 64, true)),
     createAttributeIfMissing(() => databases.createStringAttribute(env.databaseId, env.cosmeticsCollectionId, 'name', 128, true)),
-    createAttributeIfMissing(() => databases.createEnumAttribute(env.databaseId, env.cosmeticsCollectionId, 'rarity', ['common', 'rare', 'epic'], true)),
+    createOrUpdateEnumAttribute(
+      () =>
+        databases.createEnumAttribute(
+          env.databaseId,
+          env.cosmeticsCollectionId,
+          'rarity',
+          ['common', 'rare', 'epic', 'default'],
+          true,
+          'common'
+        ),
+      () =>
+        databases.updateEnumAttribute(
+          env.databaseId,
+          env.cosmeticsCollectionId,
+          'rarity',
+          ['common', 'rare', 'epic', 'default'],
+          true,
+          'common'
+        )
+    ),
+    createOrUpdateEnumAttribute(
+      () =>
+        databases.createEnumAttribute(
+          env.databaseId,
+          env.cosmeticsCollectionId,
+          'category',
+          ['cosmetic', 'character'],
+          false,
+          'cosmetic'
+        ),
+      () =>
+        databases.updateEnumAttribute(
+          env.databaseId,
+          env.cosmeticsCollectionId,
+          'category',
+          ['cosmetic', 'character'],
+          false,
+          'cosmetic'
+        )
+    ),
+    createAttributeIfMissing(() => databases.createStringAttribute(env.databaseId, env.cosmeticsCollectionId, 'gender', 16, false)),
+    createAttributeIfMissing(() => databases.createStringAttribute(env.databaseId, env.cosmeticsCollectionId, 'animations', 64, false, undefined, true)),
     createAttributeIfMissing(() => databases.createIntegerAttribute(env.databaseId, env.cosmeticsCollectionId, 'totalPieces', true))
   ])
 
@@ -166,7 +298,20 @@ async function main() {
       id: cosmetic.id,
       name: cosmetic.name,
       rarity: cosmetic.rarity,
-      totalPieces: COSMETIC_TOTAL_PIECES
+      category: 'cosmetic',
+      totalPieces: LOOT_COSMETIC_TOTAL_PIECES
+    }, [Permission.read(Role.any())])
+  }
+
+  for (const character of defaultCharacterCosmetics) {
+    await upsertDocument(databases, env.cosmeticsCollectionId, character.id, {
+      id: character.id,
+      name: character.name,
+      gender: character.gender,
+      animations: [...character.animations],
+      rarity: character.rarity,
+      category: character.category,
+      totalPieces: character.totalPieces
     }, [Permission.read(Role.any())])
   }
 

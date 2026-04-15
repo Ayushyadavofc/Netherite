@@ -4,7 +4,15 @@ import { toast } from 'sonner'
 
 import { useProfile } from '@/hooks/use-data'
 import { isAppwriteConfigured } from '@/lib/appwrite'
+import { CHARACTER_SEED_DOCUMENTS } from '@/lib/characters'
 import { useAuthStore } from '@/stores/authStore'
+
+import {
+  DATABASE_ID,
+  GACHA_COSMETICS_COLLECTION_ID,
+  databases,
+} from '@/lib/appwrite'
+import { Permission, Role } from 'appwrite'
 
 import {
   applyVaultTheme,
@@ -136,6 +144,33 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setError(saveError instanceof Error ? saveError.message : 'Could not save this vault config.')
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  const seedCosmetics = async () => {
+    setIsLoading(true)
+    try {
+      for (const character of CHARACTER_SEED_DOCUMENTS) {
+        try {
+          await databases.createDocument(DATABASE_ID, GACHA_COSMETICS_COLLECTION_ID, character.id, character, [
+            Permission.read(Role.any())
+          ])
+        } catch (error) {
+          const code = (error as Error & { code?: number }).code
+          const message = error instanceof Error ? error.message.toLowerCase() : ''
+          if (code !== 409 && !message.includes('already exists')) {
+            throw error
+          }
+
+          await databases.updateDocument(DATABASE_ID, GACHA_COSMETICS_COLLECTION_ID, character.id, character)
+        }
+      }
+      toast.success('Seeded the 6 character cosmetics.')
+    } catch (e) {
+      toast.error('Failed to seed cosmetics: ' + (e instanceof Error ? e.message : String(e)))
+      console.error(e)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -569,6 +604,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         <div className="flex items-center justify-between border-t border-[var(--nv-border)] px-6 py-4">
           <p className="text-xs text-[var(--nv-muted)]">Theme changes preview live and save into the current vault.</p>
           <div className="flex gap-3">
+            <button
+               onClick={seedCosmetics}
+               className="opacity-0 hover:opacity-10 rounded-xl px-2 text-xs transition-opacity cursor-crosshair text-white"
+               title="Seed Cosmetics (Dev)"
+            >
+              Seed
+            </button>
             <button
               onClick={handleClose}
               className="rounded-xl border border-[var(--nv-border)] px-5 py-2.5 text-sm font-medium text-[var(--nv-muted)] transition-colors hover:border-[var(--nv-primary)] hover:text-white"

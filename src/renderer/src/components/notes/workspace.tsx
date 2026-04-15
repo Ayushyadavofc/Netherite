@@ -1742,10 +1742,14 @@ export function Workspace() {
                         {editedContent.length} chars · {editedContent.split(/\s+/).filter(Boolean).length} words · Recently opened
                       </div>
                       {isRecording && (
-                        <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[var(--nv-danger)] bg-[var(--nv-danger-soft)] px-3 py-1 text-[0.58rem] text-[var(--nv-danger)]">
+                        <button
+                          onClick={() => void toggleAudioRecording()}
+                          title="Click to stop recording"
+                          className="mt-2 inline-flex cursor-pointer items-center gap-2 rounded-full border border-[var(--nv-danger)] bg-[var(--nv-danger-soft)] px-3 py-1 text-[0.58rem] text-[var(--nv-danger)] transition-colors hover:bg-[var(--nv-danger)] hover:text-white"
+                        >
                           <Square className="h-3.5 w-3.5 fill-current" />
                           Recording {recordingTime}s
-                        </div>
+                        </button>
                       )}
                     </div>
                   </div>

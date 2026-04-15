@@ -93,11 +93,13 @@ function renderAttachment(attachment: AttachmentItem) {
     return (
       <video
         controls
+        autoPlay
         src={getAttachmentUrl(attachment.fullPath)}
-        preload="metadata"
+        preload="auto"
         playsInline
+        crossOrigin="anonymous"
+        onError={(e) => console.error('Video load error:', e.currentTarget.error)}
         className="my-4 block max-h-[420px] w-full max-w-[760px] rounded-xl border border-[var(--nv-border)] bg-black"
-        onClick={() => openAttachmentPreview(attachment)}
       />
     )
   }

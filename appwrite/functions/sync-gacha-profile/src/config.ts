@@ -34,6 +34,7 @@ export type GachaUserDocument = {
   scraps: number
   gems: number
   createdAt: string
+  selectedCharacter?: string
   currentStreak?: number
   lastActiveDate?: string
   nextChestAt?: string

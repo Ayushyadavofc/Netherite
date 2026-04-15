@@ -89,8 +89,8 @@ export const getHeadPose = (
 
   const eyeMid = { x: (leftEye.x + rightEye.x) / 2, y: (leftEye.y + rightEye.y) / 2 }
   const yawOffset = (noseTip.x - eyeMid.x) / Math.max(faceWidth, 1e-4)
-  if (yawOffset <= -HEAD_POSE_YAW_THRESHOLD) return 'left'
-  if (yawOffset >= HEAD_POSE_YAW_THRESHOLD) return 'right'
+  if (yawOffset <= -HEAD_POSE_YAW_THRESHOLD) return 'right'
+  if (yawOffset >= HEAD_POSE_YAW_THRESHOLD) return 'left'
 
   const neutralNoseY = eyeMid.y + (mouthCenter.y - eyeMid.y) * 0.5
   const pitchOffset = (noseTip.y - neutralNoseY) / Math.max(faceHeight, 1e-4)

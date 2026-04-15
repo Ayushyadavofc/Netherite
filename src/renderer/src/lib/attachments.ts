@@ -151,8 +151,9 @@ export function openAttachmentPreview(attachment: AttachmentItem) {
     video.src = getAttachmentUrl(attachment.fullPath)
     video.controls = true
     video.autoplay = true
-    video.preload = 'metadata'
+    video.preload = 'auto'
     video.playsInline = true
+    video.crossOrigin = 'anonymous'
     Object.assign(video.style, {
       display: 'block',
       maxWidth: 'calc(92vw - 80px)',

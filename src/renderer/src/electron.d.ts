@@ -20,6 +20,7 @@ export interface ElectronSyncProgressPayload {
 export interface ElectronAPI {
   runtimeConfig: RuntimeAppConfig
   appLaunchId: string
+  characterAssetRoot: string
   appLog: (message: string) => Promise<{ ok: boolean }>
   readAccountFile: <T = unknown>(userId: string, filename: string) => Promise<T | null>
   writeAccountFile: <T = unknown>(userId: string, filename: string, data: T) => Promise<T>

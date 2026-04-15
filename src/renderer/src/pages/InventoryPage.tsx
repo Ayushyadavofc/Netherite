@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Shirt } from 'lucide-react'
 
-import { PixelCharacter } from '@/components/dashboard/PixelCharacter'
+import { CharacterViewer } from '@/components/gacha/CharacterViewer'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
 import { useProfile, useScraps, useStats } from '@/hooks/use-data'
+import { resolveCharacterId } from '@/lib/characters'
 import { useAuthStore } from '@/stores/authStore'
 import { useGachaStore } from '@/stores/gachaStore'
 
@@ -45,6 +46,10 @@ export default function InventoryPage() {
   const [storedScraps] = useScraps()
   const [activeFilter, setActiveFilter] = useState<CosmeticFilter>('all')
   const [previewName, setPreviewName] = useState<string | null>(null)
+  const selectedCharacter = resolveCharacterId(
+    useGachaStore((state) => state.selectedCharacter),
+    profile.gender
+  )
 
   useEffect(() => {
     void loadCatalog()
@@ -130,11 +135,11 @@ export default function InventoryPage() {
           <aside className="min-w-0 space-y-4 xl:sticky xl:top-8 xl:w-[clamp(280px,24vw,430px)] xl:shrink-0 xl:self-start">
             <section className="overflow-hidden rounded-[12px] border border-[var(--nv-border)] bg-[var(--nv-surface)]">
               <div className="bg-transparent">
-                <div className="relative min-h-[220px] overflow-hidden sm:min-h-[260px]">
-                  <div className="flex h-full min-h-[220px] w-full min-w-0 items-end justify-center overflow-hidden p-4 sm:min-h-[260px]">
-                    <div className="flex h-full w-full max-h-full max-w-full items-end justify-center overflow-hidden">
-                      <div className="aspect-square h-full w-full max-h-full max-w-[min(100%,320px)] overflow-hidden">
-                        <PixelCharacter gender={profile.gender} />
+                <div className="relative min-h-[260px] overflow-hidden sm:min-h-[320px]">
+                  <div className="flex h-full min-h-[260px] w-full min-w-0 items-end justify-center px-4 pt-4 sm:min-h-[320px] sm:px-6 sm:pt-6">
+                    <div className="flex h-full w-full max-h-full max-w-full items-end justify-center">
+                      <div className="flex h-full w-full max-w-[min(100%,360px)] items-end justify-center">
+                        <CharacterViewer characterId={selectedCharacter} size="large" showControls showLabel={false} />
                       </div>
                     </div>
                   </div>

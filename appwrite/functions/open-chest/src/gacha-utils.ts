@@ -115,6 +115,7 @@ export const createDefaultUserDocument = (userId: string): Omit<GachaUserDocumen
   scraps: 0,
   gems: 0,
   createdAt: new Date().toISOString(),
+  selectedCharacter: 'swordsman',
   currentStreak: 0,
   bonusChests: '{}'
 })
@@ -150,13 +151,21 @@ const getDuplicateBoost = (pieces: number) => {
   return 1
 }
 
-export const pickRandomCosmetic = (
+export const pickRandomCosmetic = <T extends GachaCosmeticDocument>(
   rolledRarity: GachaCosmeticDocument['rarity'],
-  cosmetics: GachaCosmeticDocument[],
+  cosmetics: T[],
   pieces: PieceMap,
   unlocked: Set<string>
 ) => {
   const unfinished = cosmetics.filter((cosmetic) => {
+    if (cosmetic.category === 'character' || cosmetic.rarity === 'default') {
+      return false
+    }
+
+    if (typeof cosmetic.totalPieces !== 'number') {
+      return false
+    }
+
     if (unlocked.has(cosmetic.id)) {
       return false
     }

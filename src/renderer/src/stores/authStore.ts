@@ -5,11 +5,13 @@ import {
   account,
   databases,
   DATABASE_ID,
+  GACHA_USERS_COLLECTION_ID,
   getAppwriteConfigurationError,
   isAppwriteConfigured,
   USER_SETTINGS_COLLECTION_ID
 } from '../lib/appwrite'
 import { unregisterCurrentDevice } from '../lib/sync-server'
+import { getDefaultCharacterId } from '@/lib/characters'
 
 type AuthUser = Models.User<Models.Preferences>
 type Gender = 'male' | 'female'
@@ -24,7 +26,8 @@ type AuthStore = {
     password: string,
     name: string,
     gender?: Gender,
-    dob?: string
+    dob?: string,
+    selectedCharacter?: string
   ) => Promise<void>
   logout: () => Promise<void>
   checkAuth: () => Promise<void>
@@ -110,7 +113,7 @@ let state: AuthStore = {
       isAuthenticated: true
     })
   },
-  register: async (email, password, name, gender = 'male', dob = '') => {
+  register: async (email, password, name, gender = 'male', dob = '', selectedCharacter) => {
     assertAppwriteConfigured()
     await account.create({
       userId: ID.unique(),
@@ -129,6 +132,64 @@ let state: AuthStore = {
       Permission.update(Role.user(user.$id)),
       Permission.delete(Role.user(user.$id))
     ])
+    if (GACHA_USERS_COLLECTION_ID) {
+      const defaultCharacter = selectedCharacter ?? getDefaultCharacterId(gender)
+
+      await databases.createDocument(DATABASE_ID, GACHA_USERS_COLLECTION_ID, user.$id, {
+        userId: user.$id,
+        scraps: 0,
+        gems: 0,
+        createdAt: new Date().toISOString(),
+        selectedCharacter: defaultCharacter,
+        currentStreak: 0,
+        bonusChests: '{}'
+      }, [
+        Permission.read(Role.user(user.$id)),
+        Permission.update(Role.user(user.$id)),
+        Permission.delete(Role.user(user.$id))
+      ]).catch(async (error) => {
+        const code = (error as Error & { code?: number }).code
+        const message = error instanceof Error ? error.message.toLowerCase() : ''
+
+        if (message.includes('unknown attribute') && message.includes('selectedcharacter')) {
+          await databases.createDocument(DATABASE_ID, GACHA_USERS_COLLECTION_ID, user.$id, {
+            userId: user.$id,
+            scraps: 0,
+            gems: 0,
+            createdAt: new Date().toISOString(),
+            currentStreak: 0,
+            bonusChests: '{}'
+          }, [
+            Permission.read(Role.user(user.$id)),
+            Permission.update(Role.user(user.$id)),
+            Permission.delete(Role.user(user.$id))
+          ]).catch((fallbackError) => {
+            const fallbackCode = (fallbackError as Error & { code?: number }).code
+            if (
+              fallbackCode !== 409 &&
+              !(fallbackError instanceof Error && fallbackError.message.toLowerCase().includes('already exists'))
+            ) {
+              throw fallbackError
+            }
+          })
+          return
+        }
+
+        if (code !== 409 && !(error instanceof Error && error.message.toLowerCase().includes('already exists'))) {
+          throw error
+        }
+      })
+
+      await window.electronAPI.writeAccountFile(user.$id, 'settings', {
+        name,
+        email,
+        gender,
+        dob,
+        avatarId: '',
+        selectedCharacter: defaultCharacter,
+        geminiApiKey: ''
+      })
+    }
   },
   logout: async () => {
     const currentUserId = state.user?.$id ?? null

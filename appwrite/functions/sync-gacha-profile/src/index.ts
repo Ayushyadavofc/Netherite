@@ -95,6 +95,7 @@ const createDefaultUserDocument = (userId: string): Omit<GachaUserDocument, '$id
   scraps: 0,
   gems: 0,
   createdAt: new Date().toISOString(),
+  selectedCharacter: 'swordsman',
   currentStreak: 0,
   bonusChests: '{}'
 })
@@ -191,7 +192,8 @@ export default async ({ req, res, log, error }: AppwriteRuntimeContext) => {
         currentStreak,
         lastActiveDate,
         nextChestAt
-      }
+      },
+      selectedCharacter: userDoc.selectedCharacter ?? null
     })
   } catch (caughtError) {
     const message = caughtError instanceof Error ? caughtError.message : 'Unable to sync gacha profile.'

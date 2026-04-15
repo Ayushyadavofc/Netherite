@@ -94,4 +94,5 @@ export interface SyncGachaProfileResponse {
   wallet: GachaWallet
   inventory: GachaInventory
   streak: GachaStreakState
+  selectedCharacter?: string | null
 }

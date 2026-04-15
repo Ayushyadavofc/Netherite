@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { PixelCharacter } from '@/components/dashboard/PixelCharacter'
+import { CharacterViewer } from '@/components/gacha/CharacterViewer'
 import { StreakCalendarStrip } from '@/components/gacha/StreakCalendarStrip'
 import { NetheriteScrapIcon } from '@/components/ui/NetheriteScrapIcon'
 import { StackedCardsIcon } from '@/components/ui/StackedCardsIcon'
@@ -11,6 +11,8 @@ import { formatLocalDate, getLocalToday } from '@/lib/date'
 import { FLASHCARDS_DATA_EVENT, loadFlashcardDeckSummaries, type FlashcardDeckSummary } from '@/lib/flashcards-data'
 import { defaultVaultConfig, getCurrentVaultPath, loadVaultConfig } from '@/lib/vault-config'
 import { DashboardRiskWidget } from '@/prechaos/DashboardRiskWidget'
+import { resolveCharacterId } from '@/lib/characters'
+import { useGachaStore } from '@/stores/gachaStore'
 
 export default function DashboardPage() {
   const [profile] = useProfile()
@@ -22,6 +24,11 @@ export default function DashboardPage() {
   const [showVaultStats, setShowVaultStats] = useState(defaultVaultConfig.preferences.showVaultStats)
   const [flashcardDecks, setFlashcardDecks] = useState<FlashcardDeckSummary[]>([])
   const [isFlashcardsLoading, setIsFlashcardsLoading] = useState(true)
+  
+  const selectedCharacter = resolveCharacterId(
+    useGachaStore((state) => state.selectedCharacter),
+    profile.gender
+  )
 
   const todayStr = getLocalToday()
   const derivedLevel = Math.max(1, Math.floor(Math.sqrt(scraps / 100)) + 1)
@@ -298,20 +305,20 @@ export default function DashboardPage() {
       <aside
         className={`${
           showVaultStats ? 'flex' : 'hidden'
-        } h-[calc(100vh-48px)] w-[300px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-[var(--nv-border)] bg-[var(--nv-bg)] p-4 no-scrollbar`}
+        } h-[calc(100vh-48px)] w-[286px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-[var(--nv-border)] bg-[#080606] p-3 no-scrollbar`}
       >
-        <section className="shrink-0 overflow-hidden rounded-[12px] border border-[var(--nv-border)] bg-[var(--nv-surface-strong)]">
-          <div className="grid grid-cols-[minmax(0,1fr)_108px] gap-2.5 p-4">
-            <div className="rounded-[10px] border-none bg-transparent pt-2">
-              <div className="flex min-h-[142px] items-end justify-center pb-2 pt-2">
-                <div className="mt-2 scale-[1.14] origin-bottom">
-                  <PixelCharacter gender={profile.gender} />
+        <section className="shrink-0 overflow-hidden rounded-[12px] border border-[var(--nv-border)] bg-[#090707] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="grid grid-cols-[118px_minmax(0,1fr)] gap-3 p-3">
+            <div className="rounded-[10px] border border-white/5 bg-black px-1 pt-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+              <div className="flex min-h-[120px] flex-col items-center justify-center pb-2 pt-2">
+                <div className="origin-bottom max-w-[118px]">
+                  <CharacterViewer characterId={selectedCharacter} size="large" showControls showLabel />
                 </div>
               </div>
             </div>
             <div className="space-y-2">
               {sidebarStatBars.map((stat) => (
-                <div key={stat.label} className="rounded-[8px] border border-[var(--nv-border)] bg-[var(--nv-surface)] px-2.5 py-2">
+                <div key={stat.label} className="rounded-[8px] border border-[var(--nv-border)] bg-[#0d0a0a] px-2.5 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--nv-subtle)]">{stat.label}</span>
                     <span className="text-[10px] font-black" style={{ color: stat.color }}>{stat.value}</span>
@@ -328,7 +335,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-3 px-4 pb-4 pt-2">
-            <div className="rounded-[8px] border border-[var(--nv-border)] bg-[var(--nv-surface)] px-3 py-2.5">
+            <div className="rounded-[8px] border border-[var(--nv-border)] bg-[#0d0a0a] px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <span className="rounded-full border border-[var(--nv-border)] bg-[var(--nv-surface-strong)] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-[var(--nv-primary)]">
@@ -343,7 +350,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded-[8px] border border-[var(--nv-border)] bg-[var(--nv-surface)] px-3 py-2.5">
+            <div className="flex items-center justify-between rounded-[8px] border border-[var(--nv-border)] bg-[#0d0a0a] px-3 py-2.5">
               <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[var(--nv-subtle)]">SCRAPS</span>
               <div className="flex items-center gap-2">
                 <NetheriteScrapIcon size={15} />

@@ -36,6 +36,7 @@ export type GachaUserDocument = {
   scraps: number
   gems: number
   createdAt: string
+  selectedCharacter?: string
   currentStreak?: number
   lastActiveDate?: string
   nextChestAt?: string
@@ -62,6 +63,9 @@ export type GachaCosmeticDocument = {
   $id: string
   id: string
   name: string
-  rarity: 'common' | 'rare' | 'epic'
-  totalPieces: number
+  rarity: 'common' | 'rare' | 'epic' | 'default'
+  totalPieces?: number
+  gender?: 'male' | 'female'
+  animations?: string[]
+  category?: 'cosmetic' | 'character'
 }

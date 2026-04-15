@@ -15,10 +15,11 @@ const tierBadgeTone: Record<string, string> = {
 function TreasureChestIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none">
-      <path d="M4 10v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-9" />
-      <path d="M4 10c0 -3 3 -5 8 -5s8 2 8 5" />
-      <path d="M3 10h18" />
-      <path d="M12 10v3" strokeWidth="2.5" />
+      <path d="M3 10V19A2 2 0 0 0 5 21H19A2 2 0 0 0 21 19V10" />
+      <path d="M3 10C3 6.6863 6.35786 5 12 5C17.6421 5 21 6.6863 21 10" />
+      <path d="M21 10H3" />
+      <rect x="10" y="8" width="4" height="4" rx="1" />
+      <path d="M12 12V14" />
     </svg>
   )
 }
@@ -117,12 +118,15 @@ export default function StorePage() {
               return (
                 <article key={chest.id} className="overflow-hidden rounded-[12px] border border-[var(--nv-border)] bg-[var(--nv-surface)]">
                   <div className="border-b border-[var(--nv-border)] p-4">
-                    <div className="relative overflow-hidden rounded-[10px] border border-dashed border-[var(--nv-border)] bg-[var(--nv-bg)]">
-                      <div className="aspect-video flex items-center justify-center">
-                        <div className="text-center">
-                          <TreasureChestIcon className="mx-auto h-9 w-9 text-[var(--nv-subtle)]" />
-                          <p className="mt-2 text-[10px] font-black uppercase tracking-[0.22em] text-[var(--nv-subtle)]">CHEST</p>
-                        </div>
+                    <div className="relative aspect-video min-h-[140px] overflow-hidden rounded-[10px] border border-dashed border-[var(--nv-border)] bg-[var(--nv-bg)]">
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        {chest.id === 'bronze' ? (
+                          <img src="/chest-bronze.png" alt="Bronze Chest" className="h-full max-h-[120px] w-auto object-contain" />
+                        ) : chest.id === 'silver' ? (
+                          <img src="/chest-silver.png" alt="Silver Chest" className="h-full max-h-[120px] w-auto object-contain" />
+                        ) : (
+                          <img src="/chest-epic.png" alt="Epic Chest" className="h-full max-h-[120px] w-auto object-contain" />
+                        )}
                       </div>
                       <span className={`absolute left-3 top-3 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.2em] ${tierBadgeTone[chest.id] ?? tierBadgeTone.bronze}`}>
                         {chest.id}
